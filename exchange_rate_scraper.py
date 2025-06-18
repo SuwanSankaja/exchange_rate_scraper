@@ -198,169 +198,6 @@ class ExchangeRateDB:
             'market_statistics': market_stats,
             'execution_environment': {
                 'github_actions': bool(os.getenv('GITHUB_ACTIONS')),
-        'workflow_run_id': os.getenv('GITHUB_RUN_ID'),
-    }
-    
-    if bank_data_list:
-        best_selling_bank = max(bank_data_list, key=lambda x: x['buying_rate'])
-        best_buying_bank = min(bank_data_list, key=lambda x: x['selling_rate'])
-        
-        summary_data.update({
-            'best_rate_to_sell_aud': {
-                'bank': best_selling_bank['bank'],
-                'rate': best_selling_bank['buying_rate']
-            },
-            'best_rate_to_buy_aud': {
-                'bank': best_buying_bank['bank'],
-                'rate': best_buying_bank['selling_rate']
-            }
-        })
-    
-    # Save summary to file for GitHub Actions artifacts
-    summary_file = Path("execution_summary.json")
-    with open(summary_file, 'w') as f:
-        json.dump(summary_data, f, indent=2, default=str)
-    
-    logger.info(f"📋 Execution summary saved to {summary_file}")
-    return summary_data
-
-def print_bank_rates_workflow_friendly(bank_data_list, logger):
-    """Print bank rates optimized for GitHub Actions logs"""
-    if not bank_data_list:
-        logger.error("❌ No bank data found")
-        return
-    
-    logger.info("=" * 80)
-    logger.info("🏦 ALL BANKS - AUD EXCHANGE RATES (People's Perspective)")
-    logger.info("=" * 80)
-    
-    for bank_info in bank_data_list:
-        spread = bank_info['selling_rate'] - bank_info['buying_rate']
-        source_indicator = "🌐" if bank_info.get('source') == 'numbers.lk' else "🏦"
-        logger.info(f"{source_indicator} {bank_info['bank']} [{bank_info.get('source', 'numbers.lk')}]")
-        logger.info(f"   💰 Sell AUD For: LKR {bank_info['buying_rate']}")
-        logger.info(f"   💸 Buy AUD For: LKR {bank_info['selling_rate']}")
-        logger.info(f"   📊 Spread: LKR {spread:.4f}")
-        logger.info("-" * 50)
-    
-    # Show best rates
-    best_selling_bank = max(bank_data_list, key=lambda x: x['buying_rate'])
-    best_buying_bank = min(bank_data_list, key=lambda x: x['selling_rate'])
-    
-    logger.info("🎯 BEST RATES FOR YOU:")
-    logger.info(f"✅ Best to Sell AUD: LKR {best_selling_bank['buying_rate']} at {best_selling_bank['bank']}")
-    logger.info(f"✅ Best to Buy AUD: LKR {best_buying_bank['selling_rate']} at {best_buying_bank['bank']}")
-    logger.info(f"📈 Total Banks: {len(bank_data_list)}")
-    
-    # Show data sources
-    sources = {}
-    for bank in bank_data_list:
-        source = bank.get('source', 'numbers.lk')
-        sources[source] = sources.get(source, 0) + 1
-    
-    logger.info(f"📡 Data Sources: {dict(sources)}")
-    logger.info("=" * 80)
-
-def main():
-    """Main execution function optimized for GitHub Actions"""
-    
-    # Setup logging and environment
-    logger = setup_logging()
-    log_environment_info(logger)
-    screenshots_dir = create_screenshots_dir()
-    
-    # Initialize variables
-    db = None
-    exit_code = 0
-    
-    try:
-        logger.info("🔗 Connecting to MongoDB Atlas...")
-        db = ExchangeRateDB(logger=logger)
-        
-        # Step 1: Scrape from numbers.lk
-        logger.info("📡 Step 1: Scraping from numbers.lk...")
-        numbers_lk_data = scrape_numbers_lk_aud_rates(logger, screenshots_dir)
-        
-        if numbers_lk_data:
-            logger.info(f"✅ numbers.lk returned {len(numbers_lk_data)} banks")
-        else:
-            logger.warning("❌ numbers.lk scraping failed")
-            numbers_lk_data = []
-        
-        # Step 2: Enhance with direct NTB scraping
-        logger.info("🏦 Step 2: Enhancing with direct NTB scraping...")
-        enhanced_bank_data = enhance_with_direct_ntb_scraping(numbers_lk_data, logger, screenshots_dir)
-        
-        # Step 3: Display and save results
-        if enhanced_bank_data:
-            print_bank_rates_workflow_friendly(enhanced_bank_data, logger)
-            
-            # Save to MongoDB
-            success = db.upsert_daily_rates(enhanced_bank_data)
-            
-            if success:
-                logger.info(f"🎉 [SUCCESS] Saved {len(enhanced_bank_data)} banks to MongoDB Atlas")
-                bank_names = [bank['bank'] for bank in enhanced_bank_data]
-                logger.info(f"🏦 Banks: {', '.join(bank_names)}")
-                
-                # Show today's complete data
-                today_data = db.get_daily_rates()
-                if today_data:
-                    logger.info(f"📊 Today's document contains {today_data['total_banks']} banks")
-                    stats = today_data['market_statistics']
-                    logger.info(f"🟢 Best Sell Rate: {stats['people_selling']['best_bank']} (LKR {stats['people_selling']['max']})")
-                    logger.info(f"🔵 Best Buy Rate: {stats['people_buying']['best_bank']} (LKR {stats['people_buying']['min']})")
-                    
-                    # Show direct scraped banks
-                    direct_scraped = [bank for bank in enhanced_bank_data if bank.get('source') != 'numbers.lk']
-                    if direct_scraped:
-                        logger.info(f"🏦 Direct Scraped: {', '.join([bank['bank'] for bank in direct_scraped])}")
-                
-                # Create execution summary
-                create_execution_summary(enhanced_bank_data, logger)
-                logger.info("✨ Execution completed successfully!")
-                
-            else:
-                logger.error("❌ [ERROR] Failed to save data to MongoDB Atlas")
-                exit_code = 1
-        else:
-            logger.error("❌ [ERROR] Failed to scrape any bank data")
-            logger.error("Possible causes:")
-            logger.error("1. Website structure changes")
-            logger.error("2. Network connectivity issues")
-            logger.error("3. ChromeDriver/Selenium issues")
-            logger.error("4. JavaScript loading problems")
-            exit_code = 1
-        
-    except Exception as e:
-        logger.error(f"❌ Critical error: {e}")
-        logger.error("Please check:")
-        logger.error("1. MONGODB_CONNECTION_STRING secret is set")
-        logger.error("2. Internet connectivity")
-        logger.error("3. MongoDB Atlas cluster status")
-        logger.error("4. Chrome/ChromeDriver installation")
-        exit_code = 1
-        
-        # Log full traceback for debugging
-        import traceback
-        logger.error(f"Full traceback: {traceback.format_exc()}")
-        
-    finally:
-        # Cleanup
-        if db:
-            db.close_connection()
-        
-        # Log final execution status
-        if exit_code == 0:
-            logger.info("🏁 Script execution completed successfully")
-        else:
-            logger.error("🏁 Script execution failed")
-        
-        # Exit with appropriate code for GitHub Actions
-        sys.exit(exit_code)
-
-if __name__ == "__main__":
-    main()GITHUB_ACTIONS')),
                 'runner_os': os.getenv('RUNNER_OS', 'unknown'),
                 'workflow_run_id': os.getenv('GITHUB_RUN_ID'),
                 'timezone': os.getenv('TZ', 'UTC')
@@ -726,9 +563,6 @@ def scrape_numbers_lk_aud_rates(logger, screenshots_dir):
             logger.info("📊 Extracting bank exchange rate data...")
             bank_data = []
             
-            # Continue with existing scraping logic...
-            # [Rest of the scraping code remains the same but with enhanced logging]
-            
             all_elements = driver.find_elements(By.XPATH, "//*[contains(text(), 'Bank') or contains(text(), 'HSBC')]")
             logger.info(f"🔍 Found {len(all_elements)} potential bank elements")
             
@@ -780,6 +614,53 @@ def scrape_numbers_lk_aud_rates(logger, screenshots_dir):
                                 
                 except Exception as e:
                     continue
+            
+            # If we don't have enough banks, try comprehensive parsing
+            if len(bank_data) < 8:
+                logger.info(f"⚠️ Only found {len(bank_data)} banks, trying comprehensive parsing...")
+                page_source = driver.page_source
+                
+                bank_patterns = [
+                    (r'Central Bank of Sri Lanka.*?(\d+\.\d+).*?(\d+\.\d+)', 'Central Bank of Sri Lanka'),
+                    (r'Amana Bank.*?(\d+\.\d+).*?(\d+\.\d+)', 'Amana Bank'),
+                    (r'Bank of Ceylon.*?(\d+\.\d+).*?(\d+\.\d+)', 'Bank of Ceylon'),
+                    (r'Commercial Bank.*?(\d+\.\d+).*?(\d+\.\d+)', 'Commercial Bank'),
+                    (r'Hatton National Bank.*?(\d+\.\d+).*?(\d+\.\d+)', 'Hatton National Bank'),
+                    (r'HSBC.*?Bank.*?(\d+\.\d+).*?(\d+\.\d+)', 'HSBC Bank'),
+                    (r'HSBC.*?(\d+\.\d+).*?(\d+\.\d+)', 'HSBC Bank'),
+                    (r'Nations Trust Bank.*?(\d+\.\d+).*?(\d+\.\d+)', 'Nations Trust Bank'),
+                    (r'People\'s Bank.*?(\d+\.\d+).*?(\d+\.\d+)', "People's Bank"),
+                    (r'Peoples Bank.*?(\d+\.\d+).*?(\d+\.\d+)', "People's Bank"),
+                    (r'Sampath Bank.*?(\d+\.\d+).*?(\d+\.\d+)', 'Sampath Bank')
+                ]
+                
+                for pattern, bank_name in bank_patterns:
+                    matches = re.findall(pattern, page_source, re.IGNORECASE | re.DOTALL)
+                    if matches:
+                        for match in matches:
+                            rate1, rate2 = match
+                            normalized_bank_name = normalize_bank_name(bank_name)
+                            
+                            # Check for duplicates
+                            duplicate_found = False
+                            for existing_bank in bank_data:
+                                if existing_bank['bank'] == normalized_bank_name:
+                                    duplicate_found = True
+                                    break
+                            
+                            if not duplicate_found and 100 <= float(rate1) <= 250 and 100 <= float(rate2) <= 250:
+                                bank_info = {
+                                    'bank': normalized_bank_name,
+                                    'buying_rate': float(rate2),
+                                    'selling_rate': float(rate1),
+                                    'currency': 'AUD',
+                                    'source': 'numbers.lk',
+                                    'timestamp': datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
+                                    'source_url': url
+                                }
+                                bank_data.append(bank_info)
+                                logger.info(f"✅ Pattern match: {normalized_bank_name} - Buy: {rate2}, Sell: {rate1}")
+                                break
             
             logger.info(f"📊 numbers.lk scraping completed. Found {len(bank_data)} banks")
             return bank_data
@@ -853,4 +734,172 @@ def create_execution_summary(bank_data_list, logger):
         'total_banks_scraped': len(bank_data_list),
         'banks_list': [bank['bank'] for bank in bank_data_list],
         'sources_used': list(set(bank.get('source', 'numbers.lk') for bank in bank_data_list)),
-        'github_actions': bool(os.getenv('
+        'github_actions': bool(os.getenv('GITHUB_ACTIONS')),
+        'workflow_run_id': os.getenv('GITHUB_RUN_ID'),
+        'runner_os': os.getenv('RUNNER_OS', 'unknown'),
+        'timezone': os.getenv('TZ', 'UTC'),
+        'execution_status': 'success' if bank_data_list else 'failed'
+    }
+    
+    if bank_data_list:
+        best_selling_bank = max(bank_data_list, key=lambda x: x['buying_rate'])
+        best_buying_bank = min(bank_data_list, key=lambda x: x['selling_rate'])
+        
+        summary_data.update({
+            'best_rate_to_sell_aud': {
+                'bank': best_selling_bank['bank'],
+                'rate': best_selling_bank['buying_rate']
+            },
+            'best_rate_to_buy_aud': {
+                'bank': best_buying_bank['bank'],
+                'rate': best_buying_bank['selling_rate']
+            },
+            'average_buying_rate': sum(bank['buying_rate'] for bank in bank_data_list) / len(bank_data_list),
+            'average_selling_rate': sum(bank['selling_rate'] for bank in bank_data_list) / len(bank_data_list)
+        })
+    
+    # Save summary to file for GitHub Actions artifacts
+    summary_file = Path("execution_summary.json")
+    with open(summary_file, 'w') as f:
+        json.dump(summary_data, f, indent=2, default=str)
+    
+    logger.info(f"📋 Execution summary saved to {summary_file}")
+    return summary_data
+
+def print_bank_rates_workflow_friendly(bank_data_list, logger):
+    """Print bank rates optimized for GitHub Actions logs"""
+    if not bank_data_list:
+        logger.error("❌ No bank data found")
+        return
+    
+    logger.info("=" * 80)
+    logger.info("🏦 ALL BANKS - AUD EXCHANGE RATES (People's Perspective)")
+    logger.info("=" * 80)
+    
+    for bank_info in bank_data_list:
+        spread = bank_info['selling_rate'] - bank_info['buying_rate']
+        source_indicator = "🌐" if bank_info.get('source') == 'numbers.lk' else "🏦"
+        logger.info(f"{source_indicator} {bank_info['bank']} [{bank_info.get('source', 'numbers.lk')}]")
+        logger.info(f"   💰 Sell AUD For: LKR {bank_info['buying_rate']}")
+        logger.info(f"   💸 Buy AUD For: LKR {bank_info['selling_rate']}")
+        logger.info(f"   📊 Spread: LKR {spread:.4f}")
+        logger.info("-" * 50)
+    
+    # Show best rates
+    best_selling_bank = max(bank_data_list, key=lambda x: x['buying_rate'])
+    best_buying_bank = min(bank_data_list, key=lambda x: x['selling_rate'])
+    
+    logger.info("🎯 BEST RATES FOR YOU:")
+    logger.info(f"✅ Best to Sell AUD: LKR {best_selling_bank['buying_rate']} at {best_selling_bank['bank']}")
+    logger.info(f"✅ Best to Buy AUD: LKR {best_buying_bank['selling_rate']} at {best_buying_bank['bank']}")
+    logger.info(f"📈 Total Banks: {len(bank_data_list)}")
+    
+    # Show data sources
+    sources = {}
+    for bank in bank_data_list:
+        source = bank.get('source', 'numbers.lk')
+        sources[source] = sources.get(source, 0) + 1
+    
+    logger.info(f"📡 Data Sources: {dict(sources)}")
+    logger.info("=" * 80)
+
+def main():
+    """Main execution function optimized for GitHub Actions"""
+    
+    # Setup logging and environment
+    logger = setup_logging()
+    log_environment_info(logger)
+    screenshots_dir = create_screenshots_dir()
+    
+    # Initialize variables
+    db = None
+    exit_code = 0
+    
+    try:
+        logger.info("🔗 Connecting to MongoDB Atlas...")
+        db = ExchangeRateDB(logger=logger)
+        
+        # Step 1: Scrape from numbers.lk
+        logger.info("📡 Step 1: Scraping from numbers.lk...")
+        numbers_lk_data = scrape_numbers_lk_aud_rates(logger, screenshots_dir)
+        
+        if numbers_lk_data:
+            logger.info(f"✅ numbers.lk returned {len(numbers_lk_data)} banks")
+        else:
+            logger.warning("❌ numbers.lk scraping failed")
+            numbers_lk_data = []
+        
+        # Step 2: Enhance with direct NTB scraping
+        logger.info("🏦 Step 2: Enhancing with direct NTB scraping...")
+        enhanced_bank_data = enhance_with_direct_ntb_scraping(numbers_lk_data, logger, screenshots_dir)
+        
+        # Step 3: Display and save results
+        if enhanced_bank_data:
+            print_bank_rates_workflow_friendly(enhanced_bank_data, logger)
+            
+            # Save to MongoDB
+            success = db.upsert_daily_rates(enhanced_bank_data)
+            
+            if success:
+                logger.info(f"🎉 [SUCCESS] Saved {len(enhanced_bank_data)} banks to MongoDB Atlas")
+                bank_names = [bank['bank'] for bank in enhanced_bank_data]
+                logger.info(f"🏦 Banks: {', '.join(bank_names)}")
+                
+                # Show today's complete data
+                today_data = db.get_daily_rates()
+                if today_data:
+                    logger.info(f"📊 Today's document contains {today_data['total_banks']} banks")
+                    stats = today_data['market_statistics']
+                    logger.info(f"🟢 Best Sell Rate: {stats['people_selling']['best_bank']} (LKR {stats['people_selling']['max']})")
+                    logger.info(f"🔵 Best Buy Rate: {stats['people_buying']['best_bank']} (LKR {stats['people_buying']['min']})")
+                    
+                    # Show direct scraped banks
+                    direct_scraped = [bank for bank in enhanced_bank_data if bank.get('source') != 'numbers.lk']
+                    if direct_scraped:
+                        logger.info(f"🏦 Direct Scraped: {', '.join([bank['bank'] for bank in direct_scraped])}")
+                
+                # Create execution summary
+                create_execution_summary(enhanced_bank_data, logger)
+                logger.info("✨ Execution completed successfully!")
+                
+            else:
+                logger.error("❌ [ERROR] Failed to save data to MongoDB Atlas")
+                exit_code = 1
+        else:
+            logger.error("❌ [ERROR] Failed to scrape any bank data")
+            logger.error("Possible causes:")
+            logger.error("1. Website structure changes")
+            logger.error("2. Network connectivity issues")
+            logger.error("3. ChromeDriver/Selenium issues")
+            logger.error("4. JavaScript loading problems")
+            exit_code = 1
+        
+    except Exception as e:
+        logger.error(f"❌ Critical error: {e}")
+        logger.error("Please check:")
+        logger.error("1. MONGODB_CONNECTION_STRING secret is set")
+        logger.error("2. Internet connectivity")
+        logger.error("3. MongoDB Atlas cluster status")
+        logger.error("4. Chrome/ChromeDriver installation")
+        exit_code = 1
+        
+        # Log full traceback for debugging
+        import traceback
+        logger.error(f"Full traceback: {traceback.format_exc()}")
+        
+    finally:
+        # Cleanup
+        if db:
+            db.close_connection()
+        
+        # Log final execution status
+        if exit_code == 0:
+            logger.info("🏁 Script execution completed successfully")
+        else:
+            logger.error("🏁 Script execution failed")
+        
+        # Exit with appropriate code for GitHub Actions
+        sys.exit(exit_code)
+
+if __name__ == "__main__":
+    main()
