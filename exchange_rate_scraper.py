@@ -234,6 +234,114 @@ class ExchangeRateDB:
         self.client.close()
         print("🔌 MongoDB connection closed")
 
+def scrape_ntb_aud_rates():
+    """
+    Scrape AUD exchange rates from NTB (Nations Trust Bank) website
+    Returns: Dictionary containing AUD buying and selling rates
+    """
+    
+    url = "https://www.nationstrust.com/foreign-exchange-rates"
+    
+    # Headers to mimic a real browser request
+    headers = {
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36',
+        'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
+        'Accept-Language': 'en-US,en;q=0.5',
+        'Accept-Encoding': 'gzip, deflate',
+        'Connection': 'keep-alive',
+        'Upgrade-Insecure-Requests': '1',
+    }
+    
+    try:
+        print("🌐 Scraping NTB directly from their website...")
+        # Send GET request
+        response = requests.get(url, headers=headers, timeout=10)
+        response.raise_for_status()
+        
+        # Parse HTML content
+        soup = BeautifulSoup(response.content, 'html.parser')
+        
+        aud_data = {
+            'bank': 'Nations Trust Bank',
+            'currency': 'AUD',
+            'buying_rate': None,
+            'selling_rate': None,
+            'timestamp': datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
+            'source_url': url
+        }
+        
+        # Debug: Check page content
+        page_text = soup.get_text()
+        if 'AUD' not in page_text:
+            print("⚠️ AUD not found in NTB page content")
+            return None
+        
+        # Method 1: Try to find AUD in tables
+        tables = soup.find_all('table')
+        print(f"🔍 Found {len(tables)} tables on NTB page")
+        
+        for table_idx, table in enumerate(tables):
+            rows = table.find_all('tr')
+            
+            for row_idx, row in enumerate(rows):
+                cells = row.find_all(['td', 'th'])
+                row_text = [cell.get_text(strip=True) for cell in cells]
+                
+                # Look for AUD in the row
+                if any('AUD' in cell for cell in row_text):
+                    print(f"✅ Found AUD in NTB table {table_idx + 1}, row {row_idx + 1}: {row_text}")
+                    
+                    # Extract numeric values
+                    numeric_values = []
+                    for cell in row_text:
+                        clean_cell = cell.replace(',', '').replace(' ', '')
+                        numbers = re.findall(r'\d+\.\d+', clean_cell)
+                        for num in numbers:
+                            if float(num) > 50:
+                                numeric_values.append(num)
+                    
+                    print(f"📊 NTB numeric values found: {numeric_values}")
+                    
+                    if len(numeric_values) >= 4:
+                        # TT rates (positions 2 and 3)
+                        aud_data['buying_rate'] = float(numeric_values[2])
+                        aud_data['selling_rate'] = float(numeric_values[3])
+                        print(f"✅ NTB TT rates - Buying: {numeric_values[2]}, Selling: {numeric_values[3]}")
+                        return aud_data
+                    elif len(numeric_values) >= 2:
+                        # Fallback
+                        aud_data['buying_rate'] = float(numeric_values[0])
+                        aud_data['selling_rate'] = float(numeric_values[1])
+                        print(f"✅ NTB rates (fallback) - Buying: {numeric_values[0]}, Selling: {numeric_values[1]}")
+                        return aud_data
+        
+        # Method 2: If table parsing fails, try text parsing
+        print("⚠️ NTB table parsing failed, trying text parsing...")
+        lines = page_text.split('\n')
+        for line in lines:
+            if 'AUD' in line and any(char.isdigit() for char in line):
+                print(f"🔍 Found AUD line in NTB: {line.strip()}")
+                numbers = re.findall(r'\d+\.\d+', line.replace(',', ''))
+                exchange_rates = [float(num) for num in numbers if float(num) > 50]
+                
+                if len(exchange_rates) >= 2:
+                    aud_data['buying_rate'] = exchange_rates[0]
+                    aud_data['selling_rate'] = exchange_rates[1]
+                    print(f"✅ NTB text parsing - Buying: {exchange_rates[0]}, Selling: {exchange_rates[1]}")
+                    return aud_data
+        
+        print("❌ No AUD rates found on NTB website with either method")
+        return None
+        
+    except requests.RequestException as e:
+        print(f"❌ Error fetching NTB webpage: {e}")
+        return None
+    except Exception as e:
+        print(f"❌ Error parsing NTB data: {e}")
+        import traceback
+        traceback.print_exc()
+        return None
+
 def scrape_numbers_lk_aud_rates():
     """Scrape all AUD exchange rates from numbers.lk - GitHub Actions optimized"""
     url = "https://tools.numbers.lk/exrates"
@@ -457,6 +565,76 @@ def print_bank_rates(bank_data_list):
     print(f"📈 Total Banks: {len(bank_data_list)}")
     print("="*80)
 
+def combine_exchange_rate_data():
+    """Combine data from numbers.lk and direct NTB scraping"""
+    print("🚀 Starting comprehensive AUD exchange rate collection...")
+    
+    all_bank_data = []
+    
+    # 1. First, scrape from numbers.lk (primary source)
+    print("\n📊 Step 1: Scraping from numbers.lk...")
+    numbers_lk_data = scrape_numbers_lk_aud_rates()
+    
+    if numbers_lk_data:
+        print(f"✅ Found {len(numbers_lk_data)} banks from numbers.lk")
+        all_bank_data.extend(numbers_lk_data)
+    else:
+        print("⚠️ No data retrieved from numbers.lk")
+    
+    # 2. Check if NTB data is missing or needs update
+    ntb_found_in_numbers = False
+    for bank in all_bank_data:
+        if 'nations trust' in bank['bank'].lower() or 'ntb' in bank['bank'].lower():
+            ntb_found_in_numbers = True
+            print(f"✅ NTB already found in numbers.lk data: {bank['bank']}")
+            break
+    
+    # 3. If NTB not found or we want to verify, scrape directly from NTB
+    if not ntb_found_in_numbers:
+        print("\n🏦 Step 2: NTB not found in numbers.lk, scraping directly from NTB website...")
+        ntb_data = scrape_ntb_aud_rates()
+        
+        if ntb_data and ntb_data['buying_rate'] and ntb_data['selling_rate']:
+            print(f"✅ Successfully scraped NTB directly: Buy {ntb_data['buying_rate']}, Sell {ntb_data['selling_rate']}")
+            all_bank_data.append(ntb_data)
+        else:
+            print("❌ Failed to scrape NTB directly")
+    else:
+        print("\n✅ Step 2: NTB data already available from numbers.lk, skipping direct scrape")
+    
+    # 4. Remove duplicates (prefer direct scraping over numbers.lk for NTB)
+    unique_banks = {}
+    for bank_data in all_bank_data:
+        bank_name = normalize_bank_name(bank_data['bank'])
+        
+        # If this is NTB from direct scraping, prefer it over numbers.lk
+        if bank_name == 'Nations Trust Bank':
+            if bank_name not in unique_banks:
+                unique_banks[bank_name] = bank_data
+            elif bank_data['source_url'] == "https://www.nationstrust.com/foreign-exchange-rates":
+                # Prefer direct NTB source
+                unique_banks[bank_name] = bank_data
+                print("🔄 Using direct NTB data instead of numbers.lk data")
+        else:
+            if bank_name not in unique_banks:
+                unique_banks[bank_name] = bank_data
+    
+    # Convert back to list
+    final_bank_data = []
+    for bank_name, bank_data in unique_banks.items():
+        bank_data['bank'] = bank_name  # Ensure normalized name
+        final_bank_data.append(bank_data)
+    
+    print(f"\n📈 Final result: {len(final_bank_data)} unique banks collected")
+    
+    # Show sources summary
+    numbers_lk_count = sum(1 for bank in final_bank_data if 'numbers.lk' in bank.get('source_url', ''))
+    ntb_direct_count = sum(1 for bank in final_bank_data if 'nationstrust.com' in bank.get('source_url', ''))
+    
+    print(f"📊 Data sources: {numbers_lk_count} from numbers.lk, {ntb_direct_count} from direct NTB scraping")
+    
+    return final_bank_data
+
 if __name__ == "__main__":
     print("🚀 GitHub Actions - Scraping AUD exchange rates from all banks via numbers.lk...")
     print(f"⏰ Current time: {datetime.now()}")
@@ -464,7 +642,9 @@ if __name__ == "__main__":
     
     try:
         db = ExchangeRateDB()
-        all_bank_data = scrape_numbers_lk_aud_rates()
+        
+        # Use the new combined scraping function
+        all_bank_data = combine_exchange_rate_data()
         
         if all_bank_data:
             print_bank_rates(all_bank_data)
@@ -474,6 +654,15 @@ if __name__ == "__main__":
                 print(f"\n🎉 [SUCCESS] Successfully saved {len(all_bank_data)} banks to MongoDB Atlas")
                 bank_names = [bank['bank'] for bank in all_bank_data]
                 print(f"🏦 Banks: {', '.join(bank_names)}")
+                
+                # Show data sources
+                numbers_lk_banks = [bank['bank'] for bank in all_bank_data if 'numbers.lk' in bank.get('source_url', '')]
+                ntb_direct_banks = [bank['bank'] for bank in all_bank_data if 'nationstrust.com' in bank.get('source_url', '')]
+                
+                if numbers_lk_banks:
+                    print(f"📊 From numbers.lk: {', '.join(numbers_lk_banks)}")
+                if ntb_direct_banks:
+                    print(f"🏦 From direct scraping: {', '.join(ntb_direct_banks)}")
                 
                 # Show today's complete data
                 today_data = db.get_daily_rates()
