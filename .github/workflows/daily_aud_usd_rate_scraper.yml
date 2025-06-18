@@ -1,0 +1,128 @@
+name: Daily Exchange Rate Scraper (AUD & USD)
+
+on:
+  schedule:
+    # Run at 10:00 AM Sri Lanka Time (UTC+5:30 = 04:30 UTC)
+    - cron: '30 4 * * *'
+  workflow_dispatch: # Allows manual triggering for testing
+
+env:
+  TZ: Asia/Colombo
+
+jobs:
+  scrape-exchange-rates:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    
+    steps:
+    - name: Checkout repository
+      uses: actions/checkout@v4
+    
+    - name: Set up Python 3.11
+      uses: actions/setup-python@v4
+      with:
+        python-version: '3.11'
+        cache: 'pip'
+    
+    - name: Install system dependencies
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y wget gnupg unzip
+    
+    - name: Install Google Chrome
+      run: |
+        wget -q -O - https://dl.google.com/linux/linux_signing_key.pub | sudo apt-key add -
+        echo "deb [arch=amd64] http://dl.google.com/linux/chrome/deb/ stable main" | sudo tee /etc/apt/sources.list.d/google-chrome.list
+        sudo apt-get update
+        sudo apt-get install -y google-chrome-stable
+    
+    - name: Install Python dependencies
+      run: |
+        python -m pip install --upgrade pip
+        pip install -r requirements.txt
+    
+    - name: Display current time (Sri Lanka)
+      run: |
+        echo "Current UTC time: $(date -u)"
+        echo "Current Sri Lanka time: $(TZ=Asia/Colombo date)"
+    
+    - name: Run AUD exchange rate scraper
+      env:
+        MONGODB_CONNECTION_STRING: ${{ secrets.MONGODB_CONNECTION_STRING }}
+      run: |
+        echo "🚀 Starting AUD exchange rate scraper..."
+        python daily_aud_rate_scraper.py
+        echo "✅ AUD scraper completed"
+    
+    - name: Wait between scrapers
+      run: |
+        echo "⏸️ Waiting 30 seconds between scrapers..."
+        sleep 30
+    
+    - name: Run USD exchange rate scraper
+      env:
+        MONGODB_CONNECTION_STRING: ${{ secrets.MONGODB_CONNECTION_STRING }}
+      run: |
+        echo "🚀 Starting USD exchange rate scraper..."
+        python daily_usd_rate_scraper.py
+        echo "✅ USD scraper completed"
+    
+    - name: Upload execution summaries
+      if: always()
+      uses: actions/upload-artifact@v4
+      with:
+        name: exchange-rate-summaries-${{ github.run_number }}
+        path: |
+          execution_summary.json
+          usd_execution_summary.json
+        retention-days: 30
+    
+    - name: Upload logs and screenshots
+      if: always()
+      uses: actions/upload-artifact@v4
+      with:
+        name: exchange-rate-logs-${{ github.run_number }}
+        path: |
+          logs/
+          screenshots/
+        retention-days: 7
+    
+    - name: Upload failure artifacts
+      if: failure()
+      uses: actions/upload-artifact@v4
+      with:
+        name: exchange-rate-failure-logs-${{ github.run_number }}
+        path: |
+          logs/
+          screenshots/
+          execution_summary.json
+          usd_execution_summary.json
+        retention-days: 14
+
+    - name: Summary report
+      if: always()
+      run: |
+        echo "📋 EXECUTION SUMMARY"
+        echo "==================="
+        
+        if [ -f "execution_summary.json" ]; then
+          echo "✅ AUD Summary available"
+          if command -v jq &> /dev/null; then
+            echo "AUD Banks scraped: $(jq -r '.total_banks_scraped' execution_summary.json)"
+            echo "AUD Best sell rate: $(jq -r '.best_rate_to_sell_aud.bank' execution_summary.json) - $(jq -r '.best_rate_to_sell_aud.rate' execution_summary.json)"
+            echo "AUD Best buy rate: $(jq -r '.best_rate_to_buy_aud.bank' execution_summary.json) - $(jq -r '.best_rate_to_buy_aud.rate' execution_summary.json)"
+          fi
+        else
+          echo "❌ AUD Summary not found"
+        fi
+        
+        if [ -f "usd_execution_summary.json" ]; then
+          echo "✅ USD Summary available"
+          if command -v jq &> /dev/null; then
+            echo "USD Banks scraped: $(jq -r '.total_banks_scraped' usd_execution_summary.json)"
+            echo "USD Best sell rate: $(jq -r '.best_rate_to_sell_usd.bank' usd_execution_summary.json) - $(jq -r '.best_rate_to_sell_usd.rate' usd_execution_summary.json)"
+            echo "USD Best buy rate: $(jq -r '.best_rate_to_buy_usd.bank' usd_execution_summary.json) - $(jq -r '.best_rate_to_buy_usd.rate' usd_execution_summary.json)"
+          fi
+        else
+          echo "❌ USD Summary not found"
+        fi
