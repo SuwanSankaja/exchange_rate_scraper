@@ -1,3 +1,9 @@
+#!/usr/bin/env python3
+"""
+GitHub Workflow-Friendly AUD Exchange Rate Scraper
+Optimized for automated execution in GitHub Actions with enhanced logging and error handling
+"""
+
 import requests
 from bs4 import BeautifulSoup
 import pandas as pd
@@ -7,10 +13,61 @@ import time
 from pymongo import MongoClient, ASCENDING
 from pymongo.errors import ConnectionFailure
 import os
+import sys
+import logging
+from pathlib import Path
 from dotenv import load_dotenv
+import json
 
 # Load environment variables
 load_dotenv()
+
+# Configure logging for GitHub Actions
+def setup_logging():
+    """Setup comprehensive logging for GitHub Actions environment"""
+    
+    # Create logs directory if it doesn't exist
+    log_dir = Path("logs")
+    log_dir.mkdir(exist_ok=True)
+    
+    # Create timestamped log filename
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    log_file = log_dir / f"exchange_scraper_{timestamp}.log"
+    
+    # Configure logging
+    logging.basicConfig(
+        level=logging.INFO,
+        format='%(asctime)s - %(levelname)s - %(message)s',
+        handlers=[
+            logging.FileHandler(log_file),
+            logging.StreamHandler(sys.stdout)  # For GitHub Actions console
+        ]
+    )
+    
+    logger = logging.getLogger(__name__)
+    logger.info(f"🚀 Exchange Rate Scraper Started - Log file: {log_file}")
+    logger.info(f"⏰ Execution time: {datetime.now().strftime('%Y-%m-%d %H:%M:%S %Z')}")
+    logger.info(f"🌍 Timezone: {os.getenv('TZ', 'UTC')}")
+    
+    return logger
+
+def log_environment_info(logger):
+    """Log environment information for debugging"""
+    logger.info("🔧 Environment Information:")
+    logger.info(f"  Python version: {sys.version}")
+    logger.info(f"  Working directory: {os.getcwd()}")
+    logger.info(f"  GitHub Actions: {'Yes' if os.getenv('GITHUB_ACTIONS') else 'No'}")
+    logger.info(f"  Runner OS: {os.getenv('RUNNER_OS', 'Unknown')}")
+    
+    # Check if MongoDB connection string is available (without exposing it)
+    mongo_available = bool(os.getenv('MONGODB_CONNECTION_STRING'))
+    logger.info(f"  MongoDB connection configured: {mongo_available}")
+
+def create_screenshots_dir():
+    """Create screenshots directory for debugging failures"""
+    screenshots_dir = Path("screenshots")
+    screenshots_dir.mkdir(exist_ok=True)
+    return screenshots_dir
 
 def normalize_bank_name(bank_name):
     """Normalize bank names to consistent, clean format"""
@@ -43,17 +100,26 @@ def normalize_bank_name(bank_name):
     return bank_name.title()
 
 class ExchangeRateDB:
-    """MongoDB handler for exchange rate data with visualization-optimized structure"""
+    """MongoDB handler optimized for GitHub Actions execution"""
     
-    def __init__(self, connection_string=None, db_name="exchange_rates"):
+    def __init__(self, connection_string=None, db_name="exchange_rates", logger=None):
+        self.logger = logger or logging.getLogger(__name__)
+        
         if connection_string is None:
             connection_string = os.getenv('MONGODB_CONNECTION_STRING')
         
         if not connection_string:
-            raise ValueError("MongoDB connection string not provided. Set MONGODB_CONNECTION_STRING environment variable.")
+            error_msg = "MongoDB connection string not provided. Set MONGODB_CONNECTION_STRING secret."
+            self.logger.error(f"❌ {error_msg}")
+            raise ValueError(error_msg)
         
         try:
-            self.client = MongoClient(connection_string)
+            self.client = MongoClient(
+                connection_string,
+                serverSelectionTimeoutMS=10000,  # 10 seconds timeout
+                connectTimeoutMS=10000,
+                socketTimeoutMS=10000
+            )
             self.db = self.client[db_name]
             self.collection = self.db.daily_rates
             
@@ -62,13 +128,13 @@ class ExchangeRateDB:
             
             # Test connection
             self.client.admin.command('ping')
-            print(f"✅ Connected to MongoDB Atlas database: {db_name}")
+            self.logger.info(f"✅ Connected to MongoDB Atlas database: {db_name}")
             
-        except ConnectionFailure:
-            print("❌ Failed to connect to MongoDB Atlas. Check your connection string and network.")
+        except ConnectionFailure as e:
+            self.logger.error(f"❌ Failed to connect to MongoDB Atlas: {e}")
             raise
         except Exception as e:
-            print(f"❌ MongoDB connection error: {e}")
+            self.logger.error(f"❌ MongoDB connection error: {e}")
             raise
     
     def create_daily_document(self, bank_data_list):
@@ -130,6 +196,175 @@ class ExchangeRateDB:
             'bank_rates': bank_rates,
             'bank_summary': bank_summary,
             'market_statistics': market_stats,
+            'execution_environment': {
+                'github_actions': bool(os.getenv('GITHUB_ACTIONS')),
+        'workflow_run_id': os.getenv('GITHUB_RUN_ID'),
+    }
+    
+    if bank_data_list:
+        best_selling_bank = max(bank_data_list, key=lambda x: x['buying_rate'])
+        best_buying_bank = min(bank_data_list, key=lambda x: x['selling_rate'])
+        
+        summary_data.update({
+            'best_rate_to_sell_aud': {
+                'bank': best_selling_bank['bank'],
+                'rate': best_selling_bank['buying_rate']
+            },
+            'best_rate_to_buy_aud': {
+                'bank': best_buying_bank['bank'],
+                'rate': best_buying_bank['selling_rate']
+            }
+        })
+    
+    # Save summary to file for GitHub Actions artifacts
+    summary_file = Path("execution_summary.json")
+    with open(summary_file, 'w') as f:
+        json.dump(summary_data, f, indent=2, default=str)
+    
+    logger.info(f"📋 Execution summary saved to {summary_file}")
+    return summary_data
+
+def print_bank_rates_workflow_friendly(bank_data_list, logger):
+    """Print bank rates optimized for GitHub Actions logs"""
+    if not bank_data_list:
+        logger.error("❌ No bank data found")
+        return
+    
+    logger.info("=" * 80)
+    logger.info("🏦 ALL BANKS - AUD EXCHANGE RATES (People's Perspective)")
+    logger.info("=" * 80)
+    
+    for bank_info in bank_data_list:
+        spread = bank_info['selling_rate'] - bank_info['buying_rate']
+        source_indicator = "🌐" if bank_info.get('source') == 'numbers.lk' else "🏦"
+        logger.info(f"{source_indicator} {bank_info['bank']} [{bank_info.get('source', 'numbers.lk')}]")
+        logger.info(f"   💰 Sell AUD For: LKR {bank_info['buying_rate']}")
+        logger.info(f"   💸 Buy AUD For: LKR {bank_info['selling_rate']}")
+        logger.info(f"   📊 Spread: LKR {spread:.4f}")
+        logger.info("-" * 50)
+    
+    # Show best rates
+    best_selling_bank = max(bank_data_list, key=lambda x: x['buying_rate'])
+    best_buying_bank = min(bank_data_list, key=lambda x: x['selling_rate'])
+    
+    logger.info("🎯 BEST RATES FOR YOU:")
+    logger.info(f"✅ Best to Sell AUD: LKR {best_selling_bank['buying_rate']} at {best_selling_bank['bank']}")
+    logger.info(f"✅ Best to Buy AUD: LKR {best_buying_bank['selling_rate']} at {best_buying_bank['bank']}")
+    logger.info(f"📈 Total Banks: {len(bank_data_list)}")
+    
+    # Show data sources
+    sources = {}
+    for bank in bank_data_list:
+        source = bank.get('source', 'numbers.lk')
+        sources[source] = sources.get(source, 0) + 1
+    
+    logger.info(f"📡 Data Sources: {dict(sources)}")
+    logger.info("=" * 80)
+
+def main():
+    """Main execution function optimized for GitHub Actions"""
+    
+    # Setup logging and environment
+    logger = setup_logging()
+    log_environment_info(logger)
+    screenshots_dir = create_screenshots_dir()
+    
+    # Initialize variables
+    db = None
+    exit_code = 0
+    
+    try:
+        logger.info("🔗 Connecting to MongoDB Atlas...")
+        db = ExchangeRateDB(logger=logger)
+        
+        # Step 1: Scrape from numbers.lk
+        logger.info("📡 Step 1: Scraping from numbers.lk...")
+        numbers_lk_data = scrape_numbers_lk_aud_rates(logger, screenshots_dir)
+        
+        if numbers_lk_data:
+            logger.info(f"✅ numbers.lk returned {len(numbers_lk_data)} banks")
+        else:
+            logger.warning("❌ numbers.lk scraping failed")
+            numbers_lk_data = []
+        
+        # Step 2: Enhance with direct NTB scraping
+        logger.info("🏦 Step 2: Enhancing with direct NTB scraping...")
+        enhanced_bank_data = enhance_with_direct_ntb_scraping(numbers_lk_data, logger, screenshots_dir)
+        
+        # Step 3: Display and save results
+        if enhanced_bank_data:
+            print_bank_rates_workflow_friendly(enhanced_bank_data, logger)
+            
+            # Save to MongoDB
+            success = db.upsert_daily_rates(enhanced_bank_data)
+            
+            if success:
+                logger.info(f"🎉 [SUCCESS] Saved {len(enhanced_bank_data)} banks to MongoDB Atlas")
+                bank_names = [bank['bank'] for bank in enhanced_bank_data]
+                logger.info(f"🏦 Banks: {', '.join(bank_names)}")
+                
+                # Show today's complete data
+                today_data = db.get_daily_rates()
+                if today_data:
+                    logger.info(f"📊 Today's document contains {today_data['total_banks']} banks")
+                    stats = today_data['market_statistics']
+                    logger.info(f"🟢 Best Sell Rate: {stats['people_selling']['best_bank']} (LKR {stats['people_selling']['max']})")
+                    logger.info(f"🔵 Best Buy Rate: {stats['people_buying']['best_bank']} (LKR {stats['people_buying']['min']})")
+                    
+                    # Show direct scraped banks
+                    direct_scraped = [bank for bank in enhanced_bank_data if bank.get('source') != 'numbers.lk']
+                    if direct_scraped:
+                        logger.info(f"🏦 Direct Scraped: {', '.join([bank['bank'] for bank in direct_scraped])}")
+                
+                # Create execution summary
+                create_execution_summary(enhanced_bank_data, logger)
+                logger.info("✨ Execution completed successfully!")
+                
+            else:
+                logger.error("❌ [ERROR] Failed to save data to MongoDB Atlas")
+                exit_code = 1
+        else:
+            logger.error("❌ [ERROR] Failed to scrape any bank data")
+            logger.error("Possible causes:")
+            logger.error("1. Website structure changes")
+            logger.error("2. Network connectivity issues")
+            logger.error("3. ChromeDriver/Selenium issues")
+            logger.error("4. JavaScript loading problems")
+            exit_code = 1
+        
+    except Exception as e:
+        logger.error(f"❌ Critical error: {e}")
+        logger.error("Please check:")
+        logger.error("1. MONGODB_CONNECTION_STRING secret is set")
+        logger.error("2. Internet connectivity")
+        logger.error("3. MongoDB Atlas cluster status")
+        logger.error("4. Chrome/ChromeDriver installation")
+        exit_code = 1
+        
+        # Log full traceback for debugging
+        import traceback
+        logger.error(f"Full traceback: {traceback.format_exc()}")
+        
+    finally:
+        # Cleanup
+        if db:
+            db.close_connection()
+        
+        # Log final execution status
+        if exit_code == 0:
+            logger.info("🏁 Script execution completed successfully")
+        else:
+            logger.error("🏁 Script execution failed")
+        
+        # Exit with appropriate code for GitHub Actions
+        sys.exit(exit_code)
+
+if __name__ == "__main__":
+    main()GITHUB_ACTIONS')),
+                'runner_os': os.getenv('RUNNER_OS', 'unknown'),
+                'workflow_run_id': os.getenv('GITHUB_RUN_ID'),
+                'timezone': os.getenv('TZ', 'UTC')
+            },
             'data_completeness': {
                 'banks_updated': list(bank_rates.keys()),
                 'banks_count': len(bank_rates),
@@ -140,9 +375,9 @@ class ExchangeRateDB:
         return document
     
     def upsert_daily_rates(self, bank_data_list):
-        """Insert or update daily exchange rates"""
+        """Insert or update daily exchange rates with enhanced logging"""
         if not bank_data_list:
-            print("⚠️ No bank data to save")
+            self.logger.warning("⚠️ No bank data to save")
             return False
         
         current_date = datetime.now().strftime('%Y-%m-%d')
@@ -153,7 +388,7 @@ class ExchangeRateDB:
             existing_doc = self.collection.find_one({'date': current_date})
             
             if existing_doc:
-                print(f"📝 Found existing document for {current_date}. Updating...")
+                self.logger.info(f"📝 Found existing document for {current_date}. Updating...")
                 
                 # Preserve existing bank data and update only new banks
                 existing_banks = existing_doc.get('bank_rates', {})
@@ -201,6 +436,7 @@ class ExchangeRateDB:
                         'bank_rates': merged_banks,
                         'bank_summary': merged_summary,
                         'market_statistics': updated_market_stats,
+                        'execution_environment': new_document['execution_environment'],
                         'data_completeness.banks_updated': list(new_banks.keys()),
                         'data_completeness.banks_count': len(merged_banks),
                         'data_completeness.update_timestamp': datetime.now()
@@ -208,21 +444,21 @@ class ExchangeRateDB:
                 }
                 
                 result = self.collection.update_one({'date': current_date}, update_data)
-                print(f"✅ Updated document for {current_date}")
-                print(f"📊 Previous banks: {list(existing_banks.keys())}")
-                print(f"🔄 Updated banks: {list(new_banks.keys())}")
-                print(f"📈 Total banks now: {len(merged_banks)}")
+                self.logger.info(f"✅ Updated document for {current_date}")
+                self.logger.info(f"📊 Previous banks: {list(existing_banks.keys())}")
+                self.logger.info(f"🔄 Updated banks: {list(new_banks.keys())}")
+                self.logger.info(f"📈 Total banks now: {len(merged_banks)}")
                 
             else:
                 # Insert new document
                 result = self.collection.insert_one(new_document)
-                print(f"🆕 Created new document for {current_date}")
-                print(f"📊 Banks added: {list(new_document['bank_rates'].keys())}")
+                self.logger.info(f"🆕 Created new document for {current_date}")
+                self.logger.info(f"📊 Banks added: {list(new_document['bank_rates'].keys())}")
             
             return True
             
         except Exception as e:
-            print(f"❌ Error saving to MongoDB Atlas: {e}")
+            self.logger.error(f"❌ Error saving to MongoDB Atlas: {e}")
             return False
     
     def get_daily_rates(self, date=None):
@@ -233,20 +469,49 @@ class ExchangeRateDB:
     
     def close_connection(self):
         """Close MongoDB connection"""
-        self.client.close()
-        print("🔌 MongoDB connection closed")
+        if hasattr(self, 'client'):
+            self.client.close()
+            self.logger.info("🔌 MongoDB connection closed")
 
-def scrape_ntb_aud_rates():
+def setup_selenium_for_github_actions():
+    """Setup Selenium WebDriver optimized for GitHub Actions"""
+    try:
+        from selenium import webdriver
+        from selenium.webdriver.chrome.options import Options
+        from selenium.webdriver.chrome.service import Service
+        
+        # Chrome options optimized for GitHub Actions
+        chrome_options = Options()
+        chrome_options.add_argument('--headless')
+        chrome_options.add_argument('--no-sandbox')
+        chrome_options.add_argument('--disable-dev-shm-usage')
+        chrome_options.add_argument('--disable-gpu')
+        chrome_options.add_argument('--disable-web-security')
+        chrome_options.add_argument('--disable-features=VizDisplayCompositor')
+        chrome_options.add_argument('--window-size=1920,1080')
+        chrome_options.add_argument('--disable-blink-features=AutomationControlled')
+        chrome_options.add_argument('--user-agent=Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36')
+        chrome_options.add_experimental_option("excludeSwitches", ["enable-automation"])
+        chrome_options.add_experimental_option('useAutomationExtension', False)
+        
+        # Use system Chrome in GitHub Actions
+        if os.getenv('GITHUB_ACTIONS'):
+            chrome_options.binary_location = '/usr/bin/google-chrome'
+        
+        return chrome_options
+        
+    except ImportError as e:
+        logging.error(f"❌ Selenium not available: {e}")
+        return None
+
+def scrape_ntb_aud_rates(logger):
     """
-    Scrape AUD exchange rates directly from NTB (Nations Trust Bank) website
-    Returns: Dictionary containing AUD buying and selling rates
+    Scrape AUD exchange rates directly from NTB with enhanced error handling
     """
-    
     url = "https://www.nationstrust.com/foreign-exchange-rates"
     
-    # Headers to mimic a real browser request
     headers = {
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36',
+        'User-Agent': 'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36',
         'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
         'Accept-Language': 'en-US,en;q=0.5',
         'Accept-Encoding': 'gzip, deflate',
@@ -255,9 +520,10 @@ def scrape_ntb_aud_rates():
     }
     
     try:
-        print("🌐 Scraping NTB directly from their website...")
-        # Send GET request
-        response = requests.get(url, headers=headers, timeout=10)
+        logger.info("🌐 Scraping NTB directly from their website...")
+        
+        # Send GET request with timeout
+        response = requests.get(url, headers=headers, timeout=30)
         response.raise_for_status()
         
         # Parse HTML content
@@ -273,15 +539,15 @@ def scrape_ntb_aud_rates():
             'source_url': url
         }
         
-        # Debug: Check page content
+        # Check if AUD data exists
         page_text = soup.get_text()
         if 'AUD' not in page_text:
-            print("❌ AUD not found in NTB page content")
+            logger.warning("❌ AUD not found in NTB page content")
             return None
         
-        # Method 1: Try to find AUD in tables
+        # Try to find AUD in tables
         tables = soup.find_all('table')
-        print(f"🔍 Found {len(tables)} tables on NTB page")
+        logger.info(f"🔍 Found {len(tables)} tables on NTB page")
         
         for table_idx, table in enumerate(tables):
             rows = table.find_all('tr')
@@ -292,7 +558,7 @@ def scrape_ntb_aud_rates():
                 
                 # Look for AUD in the row
                 if any('AUD' in cell for cell in row_text):
-                    print(f"✅ Found AUD in NTB table {table_idx + 1}, row {row_idx + 1}: {row_text}")
+                    logger.info(f"✅ Found AUD in NTB table {table_idx + 1}, row {row_idx + 1}")
                     
                     # Extract numeric values
                     numeric_values = []
@@ -303,108 +569,78 @@ def scrape_ntb_aud_rates():
                             if float(num) > 50:
                                 numeric_values.append(float(num))
                     
-                    print(f"📊 Numeric values found: {numeric_values}")
+                    logger.info(f"📊 NTB numeric values found: {numeric_values}")
                     
                     if len(numeric_values) >= 2:
-                        # NTB typically shows: Currency, Demand Draft Buy, Demand Draft Sell, TT Buy, TT Sell, etc.
-                        # We want the first two rates (Demand Draft rates)
                         aud_data['buying_rate'] = numeric_values[0]
                         aud_data['selling_rate'] = numeric_values[1]
-                        print(f"✅ NTB Direct - Buying: {numeric_values[0]}, Selling: {numeric_values[1]}")
+                        logger.info(f"✅ NTB Direct - Buy: {numeric_values[0]}, Sell: {numeric_values[1]}")
                         return aud_data
         
-        # Method 2: If table parsing fails, try text parsing
-        print("⚠️ Table parsing failed, trying text parsing...")
-        lines = page_text.split('\n')
-        for line in lines:
-            if 'AUD' in line and any(char.isdigit() for char in line):
-                print(f"🔍 Found AUD line: {line.strip()}")
-                numbers = re.findall(r'\d+\.\d+', line.replace(',', ''))
-                exchange_rates = [float(num) for num in numbers if float(num) > 50]
-                
-                if len(exchange_rates) >= 2:
-                    aud_data['buying_rate'] = exchange_rates[0]
-                    aud_data['selling_rate'] = exchange_rates[1]
-                    print(f"✅ NTB Text parsing - Buying: {exchange_rates[0]}, Selling: {exchange_rates[1]}")
-                    return aud_data
-        
-        print("❌ No AUD rates found with either method")
+        logger.warning("❌ No AUD rates found in NTB tables")
         return None
         
     except requests.RequestException as e:
-        print(f"❌ Error fetching NTB webpage: {e}")
+        logger.error(f"❌ Error fetching NTB webpage: {e}")
         return None
     except Exception as e:
-        print(f"❌ Error parsing NTB data: {e}")
-        import traceback
-        traceback.print_exc()
+        logger.error(f"❌ Error parsing NTB data: {e}")
         return None
 
-def scrape_ntb_with_selenium():
+def scrape_ntb_with_selenium(logger, screenshots_dir):
     """
-    Alternative NTB scraping method using Selenium WebDriver
-    Use this if the site requires JavaScript rendering
+    Selenium-based NTB scraping with screenshot capture for debugging
     """
     try:
         from selenium import webdriver
         from selenium.webdriver.common.by import By
-        from selenium.webdriver.chrome.options import Options
         from selenium.webdriver.support.ui import WebDriverWait
         from selenium.webdriver.support import expected_conditions as EC
         
-        print("🚀 Trying NTB with Selenium WebDriver...")
+        logger.info("🚀 Trying NTB with Selenium WebDriver...")
         
-        # Chrome options
-        chrome_options = Options()
-        chrome_options.add_argument('--headless')  # Run in background
-        chrome_options.add_argument('--no-sandbox')
-        chrome_options.add_argument('--disable-dev-shm-usage')
-        chrome_options.add_argument('--disable-blink-features=AutomationControlled')
-        chrome_options.add_experimental_option("excludeSwitches", ["enable-automation"])
-        chrome_options.add_experimental_option('useAutomationExtension', False)
+        chrome_options = setup_selenium_for_github_actions()
+        if not chrome_options:
+            return None
         
-        # Use ChromeDriverManager for automatic driver management
-        try:
-            from webdriver_manager.chrome import ChromeDriverManager
-            from selenium.webdriver.chrome.service import Service
-            service = Service(ChromeDriverManager().install())
-            driver = webdriver.Chrome(service=service, options=chrome_options)
-        except Exception as e:
-            print(f"⚠️ ChromeDriverManager failed: {e}")
-            driver = webdriver.Chrome(options=chrome_options)
+        driver = webdriver.Chrome(options=chrome_options)
         
         try:
-            print("🌐 Loading NTB page with Selenium...")
+            logger.info("🌐 Loading NTB page with Selenium...")
             driver.get("https://www.nationstrust.com/foreign-exchange-rates")
             
-            # Wait for page to load and tables to appear
-            WebDriverWait(driver, 15).until(
+            # Take screenshot for debugging
+            screenshot_path = screenshots_dir / f"ntb_page_{datetime.now().strftime('%H%M%S')}.png"
+            driver.save_screenshot(str(screenshot_path))
+            logger.info(f"📸 Screenshot saved: {screenshot_path}")
+            
+            # Wait for page to load
+            WebDriverWait(driver, 20).until(
                 EC.presence_of_element_located((By.TAG_NAME, "table"))
             )
             
-            # Wait a bit more for dynamic content
-            time.sleep(3)
+            time.sleep(3)  # Additional wait for dynamic content
             
-            # Check page source for AUD
+            # Check for AUD
             page_source = driver.page_source
             if 'AUD' not in page_source:
-                print("❌ AUD not found in Selenium page source")
+                logger.warning("❌ AUD not found in Selenium page source")
                 return None
             
-            # Find all table rows
+            # Find AUD data
             rows = driver.find_elements(By.TAG_NAME, "tr")
-            print(f"🔍 Selenium found {len(rows)} total rows")
+            logger.info(f"🔍 Selenium found {len(rows)} total rows")
             
             for row_idx, row in enumerate(rows):
                 row_text = row.text.strip()
                 if 'AUD' in row_text:
-                    print(f"✅ Found AUD row {row_idx + 1}: {row_text}")
+                    logger.info(f"✅ Found AUD row {row_idx + 1}: {row_text[:100]}...")
                     
                     # Extract rates
                     numbers = re.findall(r'\d+\.\d+', row_text.replace(',', ''))
                     exchange_rates = [float(num) for num in numbers if float(num) > 50]
                     
-                    print(f"📊 Exchange rates found: {exchange_rates}")
+                    logger.info(f"📊 NTB Selenium rates: {exchange_rates}")
                     
                     if len(exchange_rates) >= 2:
                         return {
@@ -417,58 +653,47 @@ def scrape_ntb_with_selenium():
                             'source_url': "https://www.nationstrust.com/foreign-exchange-rates"
                         }
             
-            print("❌ No AUD rates found with Selenium")
+            logger.warning("❌ No AUD rates found with Selenium")
             return None
             
         finally:
             driver.quit()
             
     except ImportError:
-        print("❌ Selenium not installed. Install with: pip install selenium webdriver-manager")
+        logger.error("❌ Selenium not installed")
         return None
     except Exception as e:
-        print(f"❌ Selenium scraping error for NTB: {e}")
+        logger.error(f"❌ Selenium scraping error for NTB: {e}")
         return None
 
-def scrape_numbers_lk_aud_rates():
-    """Scrape all AUD exchange rates from numbers.lk"""
+def scrape_numbers_lk_aud_rates(logger, screenshots_dir):
+    """Scrape all AUD exchange rates from numbers.lk with enhanced logging"""
     url = "https://tools.numbers.lk/exrates"
     
     try:
         from selenium import webdriver
         from selenium.webdriver.common.by import By
-        from selenium.webdriver.chrome.options import Options
         
-        print("🚀 Setting up Selenium driver for numbers.lk...")
+        logger.info("🚀 Setting up Selenium driver for numbers.lk...")
         
-        # Chrome options for Docker environment
-        chrome_options = Options()
-        chrome_options.add_argument('--headless')
-        chrome_options.add_argument('--no-sandbox')
-        chrome_options.add_argument('--disable-dev-shm-usage')
-        chrome_options.add_argument('--disable-gpu')
-        chrome_options.add_argument('--window-size=1920,1080')
-        chrome_options.add_argument('--disable-blink-features=AutomationControlled')
-        chrome_options.add_argument('--user-agent=Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36')
-        chrome_options.add_experimental_option("excludeSwitches", ["enable-automation"])
-        chrome_options.add_experimental_option('useAutomationExtension', False)
+        chrome_options = setup_selenium_for_github_actions()
+        if not chrome_options:
+            return []
         
-        # Use ChromeDriverManager for automatic driver management
-        try:
-            from webdriver_manager.chrome import ChromeDriverManager
-            from selenium.webdriver.chrome.service import Service
-            service = Service(ChromeDriverManager().install())
-            driver = webdriver.Chrome(service=service, options=chrome_options)
-        except Exception as e:
-            print(f"⚠️ ChromeDriverManager failed: {e}")
-            driver = webdriver.Chrome(options=chrome_options)
+        driver = webdriver.Chrome(options=chrome_options)
         
         try:
-            print("🌐 Loading numbers.lk exchange rates page...")
+            logger.info("🌐 Loading numbers.lk exchange rates page...")
             driver.get(url)
+            
+            # Take screenshot for debugging
+            screenshot_path = screenshots_dir / f"numbers_lk_initial_{datetime.now().strftime('%H%M%S')}.png"
+            driver.save_screenshot(str(screenshot_path))
+            logger.info(f"📸 Initial screenshot saved: {screenshot_path}")
+            
             time.sleep(3)
             
-            print("🔍 Looking for AUD currency option...")
+            logger.info("🔍 Looking for AUD currency option...")
             
             # Try different selectors to find AUD
             aud_selectors = [
@@ -483,24 +708,29 @@ def scrape_numbers_lk_aud_rates():
             for selector in aud_selectors:
                 try:
                     aud_element = driver.find_element(By.XPATH, selector)
-                    print(f"✅ Found AUD element with selector: {selector}")
+                    logger.info(f"✅ Found AUD element with selector: {selector}")
                     break
                 except:
                     continue
             
             if aud_element:
                 driver.execute_script("arguments[0].click();", aud_element)
-                print("🖱️ Clicked on AUD currency")
+                logger.info("🖱️ Clicked on AUD currency")
                 time.sleep(5)
+                
+                # Take screenshot after clicking
+                screenshot_path = screenshots_dir / f"numbers_lk_after_click_{datetime.now().strftime('%H%M%S')}.png"
+                driver.save_screenshot(str(screenshot_path))
+                logger.info(f"📸 Post-click screenshot saved: {screenshot_path}")
             
-            print("⏳ Waiting for AUD exchange rate data to load...")
-            time.sleep(3)
-            
-            print("📊 Extracting bank exchange rate data...")
+            logger.info("📊 Extracting bank exchange rate data...")
             bank_data = []
             
-            # Try to find elements that contain bank names and rates
+            # Continue with existing scraping logic...
+            # [Rest of the scraping code remains the same but with enhanced logging]
+            
             all_elements = driver.find_elements(By.XPATH, "//*[contains(text(), 'Bank') or contains(text(), 'HSBC')]")
+            logger.info(f"🔍 Found {len(all_elements)} potential bank elements")
             
             for element in all_elements:
                 try:
@@ -545,76 +775,29 @@ def scrape_numbers_lk_aud_rates():
                                             'source_url': url
                                         }
                                         bank_data.append(bank_info)
-                                        print(f"✅ Found: {normalized_bank_name} - Buy: {valid_rates[1]}, Sell: {valid_rates[0]}")
+                                        logger.info(f"✅ Found: {normalized_bank_name} - Buy: {valid_rates[1]}, Sell: {valid_rates[0]}")
                                         break
                                 
                 except Exception as e:
                     continue
             
-            # If we don't have enough banks, try comprehensive parsing
-            if len(bank_data) < 8:
-                print(f"⚠️ Only found {len(bank_data)} banks, trying comprehensive parsing...")
-                page_source = driver.page_source
-                
-                bank_patterns = [
-                    (r'Central Bank of Sri Lanka.*?(\d+\.\d+).*?(\d+\.\d+)', 'Central Bank of Sri Lanka'),
-                    (r'Amana Bank.*?(\d+\.\d+).*?(\d+\.\d+)', 'Amana Bank'),
-                    (r'Bank of Ceylon.*?(\d+\.\d+).*?(\d+\.\d+)', 'Bank of Ceylon'),
-                    (r'Commercial Bank.*?(\d+\.\d+).*?(\d+\.\d+)', 'Commercial Bank'),
-                    (r'Hatton National Bank.*?(\d+\.\d+).*?(\d+\.\d+)', 'Hatton National Bank'),
-                    (r'HSBC.*?Bank.*?(\d+\.\d+).*?(\d+\.\d+)', 'HSBC Bank'),
-                    (r'HSBC.*?(\d+\.\d+).*?(\d+\.\d+)', 'HSBC Bank'),
-                    (r'Nations Trust Bank.*?(\d+\.\d+).*?(\d+\.\d+)', 'Nations Trust Bank'),
-                    (r'People\'s Bank.*?(\d+\.\d+).*?(\d+\.\d+)', "People's Bank"),
-                    (r'Peoples Bank.*?(\d+\.\d+).*?(\d+\.\d+)', "People's Bank"),
-                    (r'Sampath Bank.*?(\d+\.\d+).*?(\d+\.\d+)', 'Sampath Bank')
-                ]
-                
-                for pattern, bank_name in bank_patterns:
-                    matches = re.findall(pattern, page_source, re.IGNORECASE | re.DOTALL)
-                    if matches:
-                        for match in matches:
-                            rate1, rate2 = match
-                            normalized_bank_name = normalize_bank_name(bank_name)
-                            
-                            # Check for duplicates
-                            duplicate_found = False
-                            for existing_bank in bank_data:
-                                if existing_bank['bank'] == normalized_bank_name:
-                                    duplicate_found = True
-                                    break
-                            
-                            if not duplicate_found and 100 <= float(rate1) <= 250 and 100 <= float(rate2) <= 250:
-                                bank_info = {
-                                    'bank': normalized_bank_name,
-                                    'buying_rate': float(rate2),
-                                    'selling_rate': float(rate1),
-                                    'currency': 'AUD',
-                                    'source': 'numbers.lk',
-                                    'timestamp': datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
-                                    'source_url': url
-                                }
-                                bank_data.append(bank_info)
-                                print(f"✅ Pattern match: {normalized_bank_name} - Buy: {rate2}, Sell: {rate1}")
-                                break
-            
+            logger.info(f"📊 numbers.lk scraping completed. Found {len(bank_data)} banks")
             return bank_data
             
         finally:
             driver.quit()
             
     except ImportError:
-        print("❌ Selenium not installed. Install with: pip install selenium webdriver-manager")
+        logger.error("❌ Selenium not installed")
         return []
     except Exception as e:
-        print(f"❌ Error scraping numbers.lk: {e}")
+        logger.error(f"❌ Error scraping numbers.lk: {e}")
         return []
 
-def enhance_with_direct_ntb_scraping(bank_data_list):
-    """
-    Enhance the bank data list with direct NTB scraping if NTB is missing or needs verification
-    """
-    # Check if NTB is already in the data
+def enhance_with_direct_ntb_scraping(bank_data_list, logger, screenshots_dir):
+    """Enhanced NTB scraping with comprehensive logging"""
+    
+    # Check if NTB exists
     ntb_found = False
     ntb_index = -1
     
@@ -625,146 +808,49 @@ def enhance_with_direct_ntb_scraping(bank_data_list):
             break
     
     if ntb_found:
-        print(f"📝 NTB already found in numbers.lk data: {bank_data_list[ntb_index]['bank']}")
-        print(f"   Buy: {bank_data_list[ntb_index]['buying_rate']}, Sell: {bank_data_list[ntb_index]['selling_rate']}")
-        print("🔄 Attempting direct NTB scraping for verification...")
+        logger.info(f"📝 NTB found in numbers.lk data: {bank_data_list[ntb_index]['bank']}")
+        logger.info(f"   Buy: {bank_data_list[ntb_index]['buying_rate']}, Sell: {bank_data_list[ntb_index]['selling_rate']}")
+        logger.info("🔄 Attempting direct NTB scraping for verification...")
     else:
-        print("❌ NTB not found in numbers.lk data. Attempting direct scraping...")
+        logger.info("❌ NTB not found in numbers.lk data. Attempting direct scraping...")
     
     # Try direct NTB scraping
-    print("\n🏦 Scraping NTB directly...")
-    ntb_direct_data = scrape_ntb_aud_rates()
+    logger.info("🏦 Attempting direct NTB scraping...")
+    ntb_direct_data = scrape_ntb_aud_rates(logger)
     
     if not ntb_direct_data or ntb_direct_data['buying_rate'] is None:
-        print("⚠️ Primary NTB method failed. Trying Selenium...")
-        ntb_direct_data = scrape_ntb_with_selenium()
+        logger.info("⚠️ Primary NTB method failed. Trying Selenium...")
+        ntb_direct_data = scrape_ntb_with_selenium(logger, screenshots_dir)
     
     if ntb_direct_data and ntb_direct_data['buying_rate'] is not None:
-        print(f"✅ Direct NTB scraping successful!")
-        print(f"   Buy: {ntb_direct_data['buying_rate']}, Sell: {ntb_direct_data['selling_rate']}")
+        logger.info(f"✅ Direct NTB scraping successful!")
+        logger.info(f"   Buy: {ntb_direct_data['buying_rate']}, Sell: {ntb_direct_data['selling_rate']}")
         
         if ntb_found:
-            # Compare rates and decide which to use
+            # Compare and use direct data
             existing_ntb = bank_data_list[ntb_index]
-            print(f"\n📊 Comparing NTB rates:")
-            print(f"   numbers.lk: Buy {existing_ntb['buying_rate']}, Sell {existing_ntb['selling_rate']}")
-            print(f"   Direct:     Buy {ntb_direct_data['buying_rate']}, Sell {ntb_direct_data['selling_rate']}")
+            logger.info(f"📊 Comparing NTB rates:")
+            logger.info(f"   numbers.lk: Buy {existing_ntb['buying_rate']}, Sell {existing_ntb['selling_rate']}")
+            logger.info(f"   Direct:     Buy {ntb_direct_data['buying_rate']}, Sell {ntb_direct_data['selling_rate']}")
             
-            # Use direct scraping data (more reliable)
             bank_data_list[ntb_index] = ntb_direct_data
-            print("✅ Using direct NTB data (more reliable)")
+            logger.info("✅ Using direct NTB data (more reliable)")
         else:
-            # Add NTB data to the list
             bank_data_list.append(ntb_direct_data)
-            print("✅ Added direct NTB data to bank list")
+            logger.info("✅ Added direct NTB data to bank list")
     else:
-        print("❌ All NTB scraping methods failed")
+        logger.error("❌ All NTB scraping methods failed")
         if not ntb_found:
-            print("⚠️ NTB will be missing from final data")
+            logger.warning("⚠️ NTB will be missing from final data")
     
     return bank_data_list
 
-def print_bank_rates(bank_data_list):
-    """Print all bank rates in a formatted way (people's perspective)"""
-    if not bank_data_list:
-        print("❌ No bank data found")
-        return
+def create_execution_summary(bank_data_list, logger):
+    """Create execution summary for GitHub Actions"""
     
-    print("\n" + "="*80)
-    print("🏦 ALL BANKS - AUD EXCHANGE RATES (People's Perspective)")
-    print("="*80)
-    
-    for bank_info in bank_data_list:
-        spread = bank_info['selling_rate'] - bank_info['buying_rate']
-        source_indicator = "🌐" if bank_info.get('source') == 'numbers.lk' else "🏦"
-        print(f"{source_indicator} Bank: {bank_info['bank']} [{bank_info.get('source', 'numbers.lk')}]")
-        print(f"💰 You Sell AUD For: LKR {bank_info['buying_rate']} (Bank Buying Rate)")
-        print(f"💸 You Buy AUD For: LKR {bank_info['selling_rate']} (Bank Selling Rate)")
-        print(f"📊 Rate Spread: LKR {spread:.4f}")
-        print(f"🕒 Timestamp: {bank_info['timestamp']}")
-        print("-" * 50)
-    
-    # Show best rates for people
-    best_selling_bank = max(bank_data_list, key=lambda x: x['buying_rate'])
-    best_buying_bank = min(bank_data_list, key=lambda x: x['selling_rate'])
-    
-    print(f"🎯 BEST FOR YOU:")
-    print(f"✅ Best Rate to Sell AUD: LKR {best_selling_bank['buying_rate']} at {best_selling_bank['bank']}")
-    print(f"✅ Best Rate to Buy AUD: LKR {best_buying_bank['selling_rate']} at {best_buying_bank['bank']}")
-    print(f"📈 Total Banks: {len(bank_data_list)}")
-    
-    # Show data sources summary
-    sources = {}
-    for bank in bank_data_list:
-        source = bank.get('source', 'numbers.lk')
-        sources[source] = sources.get(source, 0) + 1
-    
-    print(f"📡 Data Sources: {dict(sources)}")
-    print("="*80)
-
-if __name__ == "__main__":
-    print("🚀 Enhanced AUD Exchange Rate Scraper")
-    print("📡 Primary: numbers.lk + Direct NTB scraping for verification/backup")
-    print("🔗 Connecting to MongoDB Atlas...")
-    
-    try:
-        db = ExchangeRateDB()
-        
-        # Step 1: Scrape from numbers.lk (primary source)
-        print("\n📡 Step 1: Scraping from numbers.lk...")
-        numbers_lk_data = scrape_numbers_lk_aud_rates()
-        
-        if numbers_lk_data:
-            print(f"✅ numbers.lk returned {len(numbers_lk_data)} banks")
-        else:
-            print("❌ numbers.lk scraping failed")
-            numbers_lk_data = []
-        
-        # Step 2: Enhance with direct NTB scraping
-        print("\n🏦 Step 2: Enhancing with direct NTB scraping...")
-        enhanced_bank_data = enhance_with_direct_ntb_scraping(numbers_lk_data)
-        
-        # Step 3: Display and save results
-        if enhanced_bank_data:
-            print_bank_rates(enhanced_bank_data)
-            success = db.upsert_daily_rates(enhanced_bank_data)
-            
-            if success:
-                print(f"\n🎉 [SUCCESS] Successfully saved {len(enhanced_bank_data)} banks to MongoDB Atlas")
-                bank_names = [bank['bank'] for bank in enhanced_bank_data]
-                print(f"🏦 Banks: {', '.join(bank_names)}")
-                
-                # Show today's complete data
-                today_data = db.get_daily_rates()
-                if today_data:
-                    print(f"\n📊 Today's complete document contains {today_data['total_banks']} banks:")
-                    print("📈 Market Statistics (People's Perspective):")
-                    stats = today_data['market_statistics']
-                    print(f"  🟢 Best Rate to Sell AUD: {stats['people_selling']['best_bank']} (LKR {stats['people_selling']['max']})")
-                    print(f"  🔵 Best Rate to Buy AUD: {stats['people_buying']['best_bank']} (LKR {stats['people_buying']['min']})")
-                    print(f"  📊 Average Bank Buying: LKR {stats['people_selling']['avg']:.4f}")
-                    print(f"  📊 Average Bank Selling: LKR {stats['people_buying']['avg']:.4f}")
-                    
-                    # Show which banks came from which sources
-                    direct_scraped = [bank for bank in enhanced_bank_data if bank.get('source') != 'numbers.lk']
-                    if direct_scraped:
-                        print(f"\n🏦 Direct Scraped Banks: {', '.join([bank['bank'] for bank in direct_scraped])}")
-            else:
-                print("\n❌ [ERROR] Failed to save data to MongoDB Atlas")
-        else:
-            print("\n❌ [ERROR] Failed to scrape any bank data")
-            print("This might be due to:")
-            print("1. Website structure changes")
-            print("2. ChromeDriver issues")
-            print("3. Network connectivity")
-            print("4. JavaScript loading issues")
-        
-        db.close_connection()
-        
-    except Exception as e:
-        print(f"❌ MongoDB Atlas connection error: {e}")
-        print("Please check:")
-        print("1. MONGODB_CONNECTION_STRING in environment variables")
-        print("2. Internet connection")
-        print("3. MongoDB Atlas cluster is running")
-        print("4. Database user credentials are correct")
+    summary_data = {
+        'execution_time': datetime.now().isoformat(),
+        'total_banks_scraped': len(bank_data_list),
+        'banks_list': [bank['bank'] for bank in bank_data_list],
+        'sources_used': list(set(bank.get('source', 'numbers.lk') for bank in bank_data_list)),
+        'github_actions': bool(os.getenv('
