@@ -1,4 +1,4 @@
-name: Daily Exchange Rate Scraper (AUD, USD & EUR)
+name: Ultimate Exchange Rate Scraper (AUD, USD, EUR & GBP)
 
 on:
   schedule:
@@ -10,9 +10,9 @@ env:
   TZ: Asia/Colombo
 
 jobs:
-  scrape-all-exchange-rates:
+  scrape-all-currencies:
     runs-on: ubuntu-latest
-    timeout-minutes: 35
+    timeout-minutes: 45
     
     steps:
     - name: Checkout repository
@@ -45,7 +45,8 @@ jobs:
       run: |
         echo "Current UTC time: $(date -u)"
         echo "Current Sri Lanka time: $(TZ=Asia/Colombo date)"
-        echo "🌍 Starting comprehensive exchange rate scraping for AUD, USD, and EUR"
+        echo "🌍 Starting comprehensive exchange rate scraping for AUD, USD, EUR, and GBP"
+        echo "=================================================="
     
     - name: Run AUD exchange rate scraper
       env:
@@ -57,8 +58,8 @@ jobs:
     
     - name: Wait between AUD and USD scrapers
       run: |
-        echo "⏸️ Waiting 45 seconds between AUD and USD scrapers..."
-        sleep 45
+        echo "⏸️ Waiting 60 seconds between AUD and USD scrapers..."
+        sleep 60
     
     - name: Run USD exchange rate scraper
       env:
@@ -70,8 +71,8 @@ jobs:
     
     - name: Wait between USD and EUR scrapers
       run: |
-        echo "⏸️ Waiting 45 seconds between USD and EUR scrapers..."
-        sleep 45
+        echo "⏸️ Waiting 60 seconds between USD and EUR scrapers..."
+        sleep 60
     
     - name: Run EUR exchange rate scraper
       env:
@@ -81,22 +82,36 @@ jobs:
         python daily_eur_rate_scraper.py
         echo "✅ EUR scraper completed"
     
-    - name: Upload execution summaries
+    - name: Wait between EUR and GBP scrapers
+      run: |
+        echo "⏸️ Waiting 60 seconds between EUR and GBP scrapers..."
+        sleep 60
+    
+    - name: Run GBP exchange rate scraper
+      env:
+        MONGODB_CONNECTION_STRING: ${{ secrets.MONGODB_CONNECTION_STRING }}
+      run: |
+        echo "🇬🇧 Starting GBP exchange rate scraper..."
+        python daily_gbp_rate_scraper.py
+        echo "✅ GBP scraper completed"
+    
+    - name: Upload all execution summaries
       if: always()
       uses: actions/upload-artifact@v4
       with:
-        name: all-exchange-rate-summaries-${{ github.run_number }}
+        name: ultimate-exchange-rate-summaries-${{ github.run_number }}
         path: |
           execution_summary.json
           usd_execution_summary.json
           eur_execution_summary.json
+          gbp_execution_summary.json
         retention-days: 30
     
     - name: Upload logs and screenshots
       if: always()
       uses: actions/upload-artifact@v4
       with:
-        name: all-exchange-rate-logs-${{ github.run_number }}
+        name: ultimate-exchange-rate-logs-${{ github.run_number }}
         path: |
           logs/
           screenshots/
@@ -106,21 +121,23 @@ jobs:
       if: failure()
       uses: actions/upload-artifact@v4
       with:
-        name: all-exchange-rate-failure-logs-${{ github.run_number }}
+        name: ultimate-exchange-rate-failure-logs-${{ github.run_number }}
         path: |
           logs/
           screenshots/
           execution_summary.json
           usd_execution_summary.json
           eur_execution_summary.json
+          gbp_execution_summary.json
         retention-days: 14
 
-    - name: Comprehensive summary report
+    - name: Ultimate comprehensive summary report
       if: always()
       run: |
-        echo "📋 COMPREHENSIVE EXCHANGE RATE EXECUTION SUMMARY"
-        echo "==============================================="
+        echo "📋 ULTIMATE EXCHANGE RATE EXECUTION SUMMARY"
+        echo "==========================================="
         echo "Execution Time: $(TZ=Asia/Colombo date)"
+        echo "Total Currencies: 4 (AUD, USD, EUR, GBP)"
         echo ""
         
         # AUD Summary
@@ -174,6 +191,23 @@ jobs:
         fi
         echo ""
         
+        # GBP Summary
+        echo "🇬🇧 GBP EXCHANGE RATES:"
+        echo "========================"
+        if [ -f "gbp_execution_summary.json" ]; then
+          echo "✅ GBP scraping completed successfully"
+          if command -v jq &> /dev/null; then
+            echo "   Banks scraped: $(jq -r '.total_banks_scraped' gbp_execution_summary.json)"
+            echo "   Best to sell GBP: $(jq -r '.best_rate_to_sell_gbp.bank' gbp_execution_summary.json) - LKR $(jq -r '.best_rate_to_sell_gbp.rate' gbp_execution_summary.json)"
+            echo "   Best to buy GBP: $(jq -r '.best_rate_to_buy_gbp.bank' gbp_execution_summary.json) - LKR $(jq -r '.best_rate_to_buy_gbp.rate' gbp_execution_summary.json)"
+            echo "   Average buying rate: LKR $(jq -r '.average_buying_rate' gbp_execution_summary.json)"
+            echo "   Average selling rate: LKR $(jq -r '.average_selling_rate' gbp_execution_summary.json)"
+          fi
+        else
+          echo "❌ GBP scraping failed - summary not found"
+        fi
+        echo ""
+        
         # Overall Summary
         echo "📊 OVERALL EXECUTION STATUS:"
         echo "============================="
@@ -188,23 +222,63 @@ jobs:
         if [ -f "eur_execution_summary.json" ]; then
           total_successes=$((total_successes + 1))
         fi
+        if [ -f "gbp_execution_summary.json" ]; then
+          total_successes=$((total_successes + 1))
+        fi
         
-        echo "Successful currency scrapers: $total_successes/3"
+        echo "Successful currency scrapers: $total_successes/4"
         
-        if [ $total_successes -eq 3 ]; then
-          echo "🎉 All currency scrapers completed successfully!"
+        if [ $total_successes -eq 4 ]; then
+          echo "🎉 All 4 currency scrapers completed successfully!"
+          echo "🏆 Perfect execution - AUD, USD, EUR, and GBP all updated!"
+        elif [ $total_successes -eq 3 ]; then
+          echo "⚠️ 3 out of 4 currency scrapers completed successfully"
         elif [ $total_successes -eq 2 ]; then
-          echo "⚠️ 2 out of 3 currency scrapers completed successfully"
+          echo "⚠️ 2 out of 4 currency scrapers completed successfully"
         elif [ $total_successes -eq 1 ]; then
-          echo "⚠️ Only 1 out of 3 currency scrapers completed successfully"
+          echo "⚠️ Only 1 out of 4 currency scrapers completed successfully"
         else
           echo "❌ All currency scrapers failed"
         fi
         
         echo ""
         echo "📈 MongoDB Collections Updated:"
-        echo "   • exchange_rates.daily_aud_rates"
-        echo "   • exchange_rates.daily_usd_rates"  
-        echo "   • exchange_rates.daily_eur_rates"
+        echo "   • exchange_rates.daily_aud_rates 🇦🇺"
+        echo "   • exchange_rates.daily_usd_rates 🇺🇸"
+        echo "   • exchange_rates.daily_eur_rates 🇪🇺"
+        echo "   • exchange_rates.daily_gbp_rates 🇬🇧"
         echo ""
-        echo "✨ Exchange rate scraping workflow completed!"
+        
+        # Rate comparison summary
+        echo "💱 BEST RATES ACROSS ALL CURRENCIES:"
+        echo "===================================="
+        
+        if command -v jq &> /dev/null; then
+          # Show the highest value currency for selling (people perspective)
+          echo "🏆 Currency Value Rankings (for people selling foreign currency):"
+          
+          if [ -f "gbp_execution_summary.json" ]; then
+            gbp_rate=$(jq -r '.best_rate_to_sell_gbp.rate' gbp_execution_summary.json 2>/dev/null || echo "0")
+            echo "   🥇 GBP: LKR $gbp_rate ($(jq -r '.best_rate_to_sell_gbp.bank' gbp_execution_summary.json 2>/dev/null || echo "N/A"))"
+          fi
+          
+          if [ -f "eur_execution_summary.json" ]; then
+            eur_rate=$(jq -r '.best_rate_to_sell_eur.rate' eur_execution_summary.json 2>/dev/null || echo "0")
+            echo "   🥈 EUR: LKR $eur_rate ($(jq -r '.best_rate_to_sell_eur.bank' eur_execution_summary.json 2>/dev/null || echo "N/A"))"
+          fi
+          
+          if [ -f "usd_execution_summary.json" ]; then
+            usd_rate=$(jq -r '.best_rate_to_sell_usd.rate' usd_execution_summary.json 2>/dev/null || echo "0")
+            echo "   🥉 USD: LKR $usd_rate ($(jq -r '.best_rate_to_sell_usd.bank' usd_execution_summary.json 2>/dev/null || echo "N/A"))"
+          fi
+          
+          if [ -f "execution_summary.json" ]; then
+            aud_rate=$(jq -r '.best_rate_to_sell_aud.rate' execution_summary.json 2>/dev/null || echo "0")
+            echo "   🏅 AUD: LKR $aud_rate ($(jq -r '.best_rate_to_sell_aud.bank' execution_summary.json 2>/dev/null || echo "N/A"))"
+          fi
+        fi
+        
+        echo ""
+        echo "✨ Ultimate exchange rate scraping workflow completed!"
+        echo "🕐 Total execution time: Approximately $(( ($(date +%s) - start_time) / 60 )) minutes" || echo "🕐 Execution completed"
+        echo "📊 All data available in MongoDB Atlas for analysis and visualization"
