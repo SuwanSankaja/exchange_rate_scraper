@@ -121,7 +121,7 @@ class ExchangeRateDB:
                 socketTimeoutMS=10000
             )
             self.db = self.client[db_name]
-            self.collection = self.db.daily_rates
+            self.collection = self.db.daily_aud_rates
             
             # Create index on date for faster queries
             self.collection.create_index([("date", ASCENDING)], unique=True)
