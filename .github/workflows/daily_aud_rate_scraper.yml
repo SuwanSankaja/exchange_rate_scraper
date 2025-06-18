@@ -51,7 +51,7 @@ jobs:
         MONGODB_CONNECTION_STRING: ${{ secrets.MONGODB_CONNECTION_STRING }}
       run: |
         echo "🚀 Starting exchange rate scraper..."
-        python exchange_rate_scraper.py
+        python daily_aud_rate_scraper.py
     
     - name: Upload logs on failure
       if: failure()

@@ -9,7 +9,7 @@ your-repo/
 ├── .github/
 │   └── workflows/
 │       └── daily-scraper.yml          # GitHub workflow file
-├── exchange_rate_scraper.py           # Main scraper script (workflow-optimized)
+├── daily_aud_rate_scraper.py           # Main scraper script (workflow-optimized)
 ├── requirements.txt                   # Python dependencies
 ├── .env.example                      # Environment variables template
 ├── logs/                             # Created automatically for log files
@@ -21,7 +21,7 @@ your-repo/
 
 ### 1. Repository Setup
 
-1. Copy the workflow-optimized script to `exchange_rate_scraper.py`
+1. Copy the workflow-optimized script to `daily_aud_rate_scraper.py`
 2. Copy the workflow file to `.github/workflows/daily-scraper.yml`
 3. Copy `requirements.txt` to your repository root
 
@@ -92,7 +92,7 @@ pip install -r requirements.txt
 export MONGODB_CONNECTION_STRING="your_connection_string"
 
 # Run the scraper
-python exchange_rate_scraper.py
+python daily_aud_rate_scraper.py
 ```
 
 ## 📋 Workflow Steps
