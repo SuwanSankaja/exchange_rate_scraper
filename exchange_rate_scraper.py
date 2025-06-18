@@ -581,40 +581,30 @@ def combine_exchange_rate_data():
     else:
         print("⚠️ No data retrieved from numbers.lk")
     
-    # 2. Check if NTB data is missing or needs update
-    ntb_found_in_numbers = False
-    for bank in all_bank_data:
-        if 'nations trust' in bank['bank'].lower() or 'ntb' in bank['bank'].lower():
-            ntb_found_in_numbers = True
-            print(f"✅ NTB already found in numbers.lk data: {bank['bank']}")
-            break
+    # 2. Always scrape NTB directly for the most accurate data
+    print("\n🏦 Step 2: Scraping NTB directly for maximum accuracy...")
+    ntb_data = scrape_ntb_aud_rates()
     
-    # 3. If NTB not found or we want to verify, scrape directly from NTB
-    if not ntb_found_in_numbers:
-        print("\n🏦 Step 2: NTB not found in numbers.lk, scraping directly from NTB website...")
-        ntb_data = scrape_ntb_aud_rates()
-        
-        if ntb_data and ntb_data['buying_rate'] and ntb_data['selling_rate']:
-            print(f"✅ Successfully scraped NTB directly: Buy {ntb_data['buying_rate']}, Sell {ntb_data['selling_rate']}")
-            all_bank_data.append(ntb_data)
-        else:
-            print("❌ Failed to scrape NTB directly")
+    if ntb_data and ntb_data['buying_rate'] and ntb_data['selling_rate']:
+        print(f"✅ Successfully scraped NTB directly: Buy {ntb_data['buying_rate']}, Sell {ntb_data['selling_rate']}")
+        all_bank_data.append(ntb_data)
     else:
-        print("\n✅ Step 2: NTB data already available from numbers.lk, skipping direct scrape")
+        print("❌ Failed to scrape NTB directly, will use numbers.lk data if available")
     
-    # 4. Remove duplicates (prefer direct scraping over numbers.lk for NTB)
+    # 4. Remove duplicates and prioritize direct NTB scraping
     unique_banks = {}
     for bank_data in all_bank_data:
         bank_name = normalize_bank_name(bank_data['bank'])
         
-        # If this is NTB from direct scraping, prefer it over numbers.lk
+        # Always prefer direct NTB scraping over numbers.lk
         if bank_name == 'Nations Trust Bank':
             if bank_name not in unique_banks:
                 unique_banks[bank_name] = bank_data
             elif bank_data['source_url'] == "https://www.nationstrust.com/foreign-exchange-rates":
-                # Prefer direct NTB source
+                # Always use direct NTB source
                 unique_banks[bank_name] = bank_data
                 print("🔄 Using direct NTB data instead of numbers.lk data")
+            # If direct NTB failed, keep numbers.lk data as fallback
         else:
             if bank_name not in unique_banks:
                 unique_banks[bank_name] = bank_data
