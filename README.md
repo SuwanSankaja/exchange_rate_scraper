@@ -1,4 +1,4 @@
-# 🚀 GitHub Workflow-Friendly AUD Exchange Rate Scraper
+# 🚀 GitHub Workflow-Friendly Foreign Currency Exchange Rate Scraper
 
 This enhanced version of the exchange rate scraper is optimized for automated execution in GitHub Actions with comprehensive logging, error handling, and debugging capabilities.
 
