@@ -1,4 +1,4 @@
-# 🚀 GitHub Workflow-Friendly AUD Exchange Rate Scraper
+# 🚀 GitHub Workflow-Friendly Foreign Currency Exchange Rate Scraper
 
 This enhanced version of the exchange rate scraper is optimized for automated execution in GitHub Actions with comprehensive logging, error handling, and debugging capabilities.
 
@@ -8,8 +8,11 @@ This enhanced version of the exchange rate scraper is optimized for automated ex
 your-repo/
 ├── .github/
 │   └── workflows/
-│       └── daily-scraper.yml          # GitHub workflow file
-├── daily_aud_rate_scraper.py           # Main scraper script (workflow-optimized)
+│       └── daily_aud_usd_euro_gbp_rate_scraper.yml          # GitHub workflow file
+├── daily_aud_rate_scraper.py           # AUD scraper script (workflow-optimized)
+├── daily_usd_rate_scraper.py           # USD scraper script (workflow-optimized)
+├── daily_eur_rate_scraper.py           # EUR scraper script (workflow-optimized)
+├── daily_gbp_rate_scraper.py           # GBP scraper script (workflow-optimized)
 ├── requirements.txt                   # Python dependencies
 ├── .env.example                      # Environment variables template
 ├── logs/                             # Created automatically for log files
@@ -21,9 +24,7 @@ your-repo/
 
 ### 1. Repository Setup
 
-1. Copy the workflow-optimized script to `daily_aud_rate_scraper.py`
-2. Copy the workflow file to `.github/workflows/daily-scraper.yml`
-3. Copy `requirements.txt` to your repository root
+Clone the Repo
 
 ### 2. MongoDB Atlas Secret
 
@@ -78,7 +79,7 @@ The workflow runs automatically at **10:00 AM Sri Lanka Time** daily via cron sc
 You can manually trigger the workflow:
 
 1. Go to your repository → Actions
-2. Select "Daily AUD Exchange Rate Scraper"
+2. Select "Ultimate Exchange Rate Scraper (AUD, USD, EUR & GBP)"
 3. Click "Run workflow"
 4. Optional: Enable debug mode for extended logging
 
@@ -91,8 +92,11 @@ pip install -r requirements.txt
 # Set environment variables
 export MONGODB_CONNECTION_STRING="your_connection_string"
 
-# Run the scraper
+# Run the scrapers
 python daily_aud_rate_scraper.py
+python daily_usd_rate_scraper.py
+python daily_eur_rate_scraper.py
+python daily_gbp_rate_scraper.py
 ```
 
 ## 📋 Workflow Steps
