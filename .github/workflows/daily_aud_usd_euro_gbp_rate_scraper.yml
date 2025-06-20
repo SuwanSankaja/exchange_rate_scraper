@@ -2,8 +2,14 @@ name: Ultimate Exchange Rate Scraper (AUD, USD, EUR & GBP)
 
 on:
   schedule:
+    # Run at 6:00 AM Sri Lanka Time (UTC+5:30 = 00:30 UTC)
+    - cron: '30 0 * * *'
+    # Run at 7:00 AM Sri Lanka Time (UTC+5:30 = 02:30 UTC)
+    - cron: '30 2 * * *'
     # Run at 10:00 AM Sri Lanka Time (UTC+5:30 = 04:30 UTC)
     - cron: '30 4 * * *'
+    # Run at 6:00 PM Sri Lanka Time (UTC+5:30 = 12:30 UTC)
+    - cron: '30 12 * * *'
   workflow_dispatch: # Allows manual triggering for testing
 
 env:
