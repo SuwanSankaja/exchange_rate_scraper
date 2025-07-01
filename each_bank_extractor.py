@@ -4,6 +4,18 @@ import pandas as pd
 import re
 from datetime import datetime
 
+
+import time
+import re
+from datetime import datetime
+from selenium import webdriver
+from selenium.webdriver.common.by import By
+from selenium.webdriver.support.ui import WebDriverWait
+from selenium.webdriver.support import expected_conditions as EC
+from selenium.webdriver.chrome.options import Options
+from selenium.common.exceptions import TimeoutException, NoSuchElementException, WebDriverException
+import json
+
 def scrape_boc_aud_rates():
     """
     Scrape AUD exchange rates from Bank of Ceylon website
@@ -254,88 +266,293 @@ def scrape_amana_aud_rates():
         print(f"Error parsing Amana Bank data: {e}")
         return None
 
+def setup_chrome_driver(headless=True):
+    """
+    Setup Chrome WebDriver with optimal settings for scraping
+    """
+    chrome_options = Options()
+    
+    if headless:
+        chrome_options.add_argument("--headless")
+    
+    # Performance and compatibility options
+    chrome_options.add_argument("--no-sandbox")
+    chrome_options.add_argument("--disable-dev-shm-usage")
+    chrome_options.add_argument("--disable-gpu")
+    chrome_options.add_argument("--disable-extensions")
+    chrome_options.add_argument("--disable-images")
+    chrome_options.add_argument("--disable-javascript-harmony-shipping")
+    chrome_options.add_argument("--disable-background-timer-throttling")
+    chrome_options.add_argument("--disable-renderer-backgrounding")
+    chrome_options.add_argument("--disable-backgrounding-occluded-windows")
+    
+    # Set window size for consistent rendering
+    chrome_options.add_argument("--window-size=1920,1080")
+    
+    # User agent to avoid detection
+    chrome_options.add_argument("--user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36")
+    
+    try:
+        driver = webdriver.Chrome(options=chrome_options)
+        driver.set_page_load_timeout(30)
+        return driver
+    except Exception as e:
+        print(f"Error setting up Chrome driver: {e}")
+        print("Make sure ChromeDriver is installed and in your PATH")
+        return None
+
 def scrape_hnb_aud_rates():
     """
-    Scrape AUD exchange rates from HNB (Hatton National Bank) website
+    Scrape AUD exchange rates from HNB website using Selenium
     Returns: Dictionary containing AUD buying and selling rates
     """
     
-    url = "https://www.hnb.net/exchange-rates"
+    url = "https://www.hnb.lk/"
     
-    # Headers to mimic a real browser request
-    headers = {
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36',
-        'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
-        'Accept-Language': 'en-US,en;q=0.5',
-        'Accept-Encoding': 'gzip, deflate',
-        'Connection': 'keep-alive',
-        'Upgrade-Insecure-Requests': '1',
+    aud_data = {
+        'currency': 'AUD',
+        'buying_rate': None,
+        'selling_rate': None,
+        'source': 'HNB',
+        'timestamp': datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
+        'source_url': url
     }
     
+    driver = None
+    
     try:
-        # Send GET request
-        response = requests.get(url, headers=headers, timeout=10)
-        response.raise_for_status()
+        # Setup Chrome driver
+        driver = setup_chrome_driver(headless=True)
+        if not driver:
+            return None
         
-        # Parse HTML content
-        soup = BeautifulSoup(response.content, 'html.parser')
+        print("Loading HNB website...")
+        driver.get(url)
         
-        # Find the exchange rates table
-        tables = soup.find_all('table')
+        # Wait for page to load
+        wait = WebDriverWait(driver, 20)
         
-        aud_data = {
-            'currency': 'AUD',
-            'buying_rate': None,
-            'selling_rate': None,
-            'source': 'HNB',
-            'timestamp': datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
-            'source_url': url
-        }
+        # Try multiple strategies to find AUD rates
         
-        # Search through all tables for AUD data
-        for table in tables:
-            rows = table.find_all('tr')
+        # Strategy 1: Wait for exchange rate section to load and look for AUD
+        try:
+            print("Strategy 1: Looking for exchange rate elements...")
             
-            for row in rows:
-                cells = row.find_all(['td', 'th'])
+            # Wait for any exchange rate related elements to appear
+            rate_elements = wait.until(
+                EC.presence_of_all_elements_located((By.XPATH, "//*[contains(text(), 'USD') or contains(text(), 'Exchange') or contains(text(), 'Rate')]"))
+            )
+            
+            # Give extra time for all rates to load
+            time.sleep(5)
+            
+            # Look for AUD specifically
+            aud_elements = driver.find_elements(By.XPATH, "//*[contains(text(), 'AUS') or contains(text(), 'AUD')]")
+            
+            for element in aud_elements:
+                print(f"Found AUD element: {element.text}")
                 
-                # Convert cells to text for easier searching
-                row_text = [cell.get_text(strip=True) for cell in cells]
-                
-                # Look for Australian Dollar in the row
-                if len(row_text) > 0 and any('Australian' in cell for cell in row_text):
-                    print(f"Found AUD row: {row_text}")
-                    
-                    # Try to extract numeric values (exchange rates)
-                    numeric_values = []
-                    for cell in row_text[1:]:  # Skip the first cell (currency name)
-                        # Look for decimal numbers that look like exchange rates (> 50)
-                        numbers = re.findall(r'\d+\.\d+', cell)
-                        for num in numbers:
-                            if float(num) > 50:  # Exchange rates should be > 50 LKR
-                                numeric_values.append(num)
-                    
-                    print(f"Numeric values found: {numeric_values}")
-                    
-                    # Get the first two valid exchange rate values (Telegraphic Transfer Buying and Selling)
-                    if len(numeric_values) >= 2:
-                        aud_data['buying_rate'] = float(numeric_values[0])
-                        aud_data['selling_rate'] = float(numeric_values[1])
-                        print(f"Selected rates - Buying: {numeric_values[0]}, Selling: {numeric_values[1]}")
+                # Get parent container that might have the rates
+                parent = element
+                for _ in range(5):  # Check up to 5 parent levels
+                    try:
+                        parent_text = parent.text
+                        print(f"Checking parent container: {parent_text[:200]}...")
+                        
+                        # Extract numbers that look like exchange rates
+                        numbers = re.findall(r'(\d{2,3}\.\d{1,4})', parent_text)
+                        valid_rates = [float(num) for num in numbers if 150 <= float(num) <= 250]
+                        
+                        if len(valid_rates) >= 2:
+                            valid_rates.sort()
+                            aud_data['buying_rate'] = valid_rates[0]
+                            aud_data['selling_rate'] = valid_rates[1]
+                            print(f"Found rates in parent - Buying: {valid_rates[0]}, Selling: {valid_rates[1]}")
+                            return aud_data
+                        
+                        parent = parent.find_element(By.XPATH, "..")
+                    except:
                         break
-            
-            # Break out of outer loop if we found the data
-            if aud_data['buying_rate'] is not None:
-                break
+                        
+        except TimeoutException:
+            print("Strategy 1 failed - no exchange rate elements found")
         
+        # Strategy 2: Look for common CSS selectors for exchange rates
+        try:
+            print("Strategy 2: Trying common CSS selectors...")
+            
+            selectors = [
+                "[class*='rate']",
+                "[class*='exchange']",
+                "[class*='currency']",
+                "[data-currency='AUD']",
+                "[data-currency='AUS']",
+                ".exchange-rate",
+                ".currency-rate",
+                ".rate-card",
+                ".currency-card"
+            ]
+            
+            for selector in selectors:
+                try:
+                    elements = driver.find_elements(By.CSS_SELECTOR, selector)
+                    for element in elements:
+                        if 'AUD' in element.text or 'AUS' in element.text:
+                            rates = extract_rates_from_text(element.text)
+                            if rates:
+                                aud_data.update(rates)
+                                print(f"Found rates via CSS selector '{selector}': {rates}")
+                                return aud_data
+                except:
+                    continue
+                    
+        except Exception as e:
+            print(f"Strategy 2 failed: {e}")
+        
+        # Strategy 3: Search entire page source for AUD rates
+        try:
+            print("Strategy 3: Searching page source...")
+            
+            page_source = driver.page_source
+            
+            # Look for AUD patterns in the HTML
+            aud_pattern = r'(?i)(?:AUD|AUS|Australian).*?(\d{2,3}\.\d{1,4}).*?(\d{2,3}\.\d{1,4})'
+            matches = re.findall(aud_pattern, page_source)
+            
+            for match in matches:
+                rates = [float(rate) for rate in match if 150 <= float(rate) <= 250]
+                if len(rates) >= 2:
+                    rates.sort()
+                    aud_data['buying_rate'] = rates[0]
+                    aud_data['selling_rate'] = rates[1]
+                    print(f"Found rates in page source - Buying: {rates[0]}, Selling: {rates[1]}")
+                    return aud_data
+                    
+        except Exception as e:
+            print(f"Strategy 3 failed: {e}")
+        
+        # Strategy 4: Look for JSON data in script tags
+        try:
+            print("Strategy 4: Looking for JSON data...")
+            
+            script_elements = driver.find_elements(By.TAG_NAME, "script")
+            
+            for script in script_elements:
+                try:
+                    script_content = script.get_attribute("innerHTML")
+                    if script_content and ('AUD' in script_content or 'AUS' in script_content):
+                        # Try to extract JSON objects
+                        json_pattern = r'\{[^{}]*(?:\{[^{}]*\}[^{}]*)*\}'
+                        json_matches = re.findall(json_pattern, script_content)
+                        
+                        for json_str in json_matches:
+                            try:
+                                data = json.loads(json_str)
+                                rates = find_aud_rates_in_dict(data)
+                                if rates:
+                                    aud_data.update(rates)
+                                    print(f"Found rates in JSON: {rates}")
+                                    return aud_data
+                            except json.JSONDecodeError:
+                                continue
+                except:
+                    continue
+                    
+        except Exception as e:
+            print(f"Strategy 4 failed: {e}")
+        
+        # Strategy 5: Take screenshot for manual inspection (debug mode)
+        try:
+            print("Strategy 5: Taking screenshot for debugging...")
+            driver.save_screenshot("hnb_debug.png")
+            print("Screenshot saved as 'hnb_debug.png' for manual inspection")
+        except:
+            pass
+        
+        print("All strategies failed to find AUD exchange rates")
         return aud_data
         
-    except requests.RequestException as e:
-        print(f"Error fetching HNB webpage: {e}")
+    except WebDriverException as e:
+        print(f"WebDriver error: {e}")
         return None
     except Exception as e:
-        print(f"Error parsing HNB data: {e}")
+        print(f"Error scraping HNB data: {e}")
         return None
+    finally:
+        if driver:
+            driver.quit()
+
+def extract_rates_from_text(text):
+    """
+    Extract buying and selling rates from text
+    """
+    # Look for patterns like "Buying: 193.07" and "Selling: 203.4"
+    buying_match = re.search(r'(?i)(?:buy|purchase|buying).*?(\d{2,3}\.\d{1,4})', text)
+    selling_match = re.search(r'(?i)(?:sell|selling|sale).*?(\d{2,3}\.\d{1,4})', text)
+    
+    if buying_match and selling_match:
+        buying_rate = float(buying_match.group(1))
+        selling_rate = float(selling_match.group(1))
+        
+        if 150 <= buying_rate <= 250 and 150 <= selling_rate <= 250:
+            return {
+                'buying_rate': buying_rate,
+                'selling_rate': selling_rate
+            }
+    
+    # Fallback: look for any two numbers that could be rates
+    numbers = re.findall(r'(\d{2,3}\.\d{1,4})', text)
+    valid_rates = [float(num) for num in numbers if 150 <= float(num) <= 250]
+    
+    if len(valid_rates) >= 2:
+        valid_rates.sort()
+        return {
+            'buying_rate': valid_rates[0],
+            'selling_rate': valid_rates[1]
+        }
+    
+    return None
+
+def find_aud_rates_in_dict(data, path=""):
+    """
+    Recursively search for AUD rates in a dictionary/JSON structure
+    """
+    if isinstance(data, dict):
+        for key, value in data.items():
+            current_path = f"{path}.{key}" if path else key
+            
+            # Check if this key might contain AUD data
+            if re.search(r'AUD|AUS|Australian', str(key), re.IGNORECASE):
+                if isinstance(value, dict):
+                    # Look for buying/selling rates
+                    buying = None
+                    selling = None
+                    
+                    for subkey, subvalue in value.items():
+                        if re.search(r'buy|purchase', str(subkey), re.IGNORECASE):
+                            if isinstance(subvalue, (int, float)) and 150 <= subvalue <= 250:
+                                buying = subvalue
+                        elif re.search(r'sell|sale', str(subkey), re.IGNORECASE):
+                            if isinstance(subvalue, (int, float)) and 150 <= subvalue <= 250:
+                                selling = subvalue
+                    
+                    if buying and selling:
+                        return {'buying_rate': buying, 'selling_rate': selling}
+            
+            # Recursively search in nested structures
+            if isinstance(value, (dict, list)):
+                result = find_aud_rates_in_dict(value, current_path)
+                if result:
+                    return result
+                    
+    elif isinstance(data, list):
+        for i, item in enumerate(data):
+            current_path = f"{path}[{i}]" if path else f"[{i}]"
+            result = find_aud_rates_in_dict(item, current_path)
+            if result:
+                return result
+    
+    return None
 
 def scrape_hsbc_aud_rates():
     """

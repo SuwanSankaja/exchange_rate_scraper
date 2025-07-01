@@ -1,1 +1,6 @@
 .env
+logs
+screenshots
+*.csv
+*.json
+*.log
