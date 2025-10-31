@@ -1,0 +1,17 @@
+[project]
+name = "exchange-rate-scraper"
+version = "0.1.0"
+description = "Add your description here"
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = [
+    "beautifulsoup4>=4.12.0",
+    "html5lib>=1.1",
+    "lxml>=4.9.0",
+    "pandas>=2.0.0",
+    "pymongo>=4.5.0",
+    "python-dotenv>=1.0.0",
+    "requests>=2.31.0",
+    "selenium>=4.15.0",
+    "webdriver-manager>=4.0.0",
+]
