@@ -69,8 +69,8 @@ jobs:
     
     - name: Wait between AUD and USD scrapers
       run: |
-        echo "⏸️ Waiting 60 seconds between AUD and USD scrapers..."
-        sleep 60
+        echo "⏸️ Waiting 5 seconds between AUD and USD scrapers..."
+        sleep 5
     
     - name: Run USD exchange rate scraper
       env:
@@ -82,8 +82,8 @@ jobs:
     
     - name: Wait between USD and EUR scrapers
       run: |
-        echo "⏸️ Waiting 60 seconds between USD and EUR scrapers..."
-        sleep 60
+        echo "⏸️ Waiting 5 seconds between USD and EUR scrapers..."
+        sleep 5
     
     - name: Run EUR exchange rate scraper
       env:
@@ -95,8 +95,8 @@ jobs:
     
     - name: Wait between EUR and GBP scrapers
       run: |
-        echo "⏸️ Waiting 60 seconds between EUR and GBP scrapers..."
-        sleep 60
+        echo "⏸️ Waiting 5 seconds between EUR and GBP scrapers..."
+        sleep 5
     
     - name: Run GBP exchange rate scraper
       env:
