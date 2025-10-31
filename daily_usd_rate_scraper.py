@@ -332,8 +332,11 @@ class USDExchangeRateDB:
             self.logger.info("🔌 MongoDB connection closed")
 
 def setup_selenium_for_github_actions():
-    """Setup Selenium WebDriver optimized for GitHub Actions"""
+    """Setup Selenium WebDriver optimized for GitHub Actions with automatic ChromeDriver management"""
     try:
+        from selenium.webdriver.chrome.service import Service
+        from webdriver_manager.chrome import ChromeDriverManager
+        
         # Chrome options optimized for GitHub Actions and general scraping
         chrome_options = Options()
         chrome_options.add_argument('--headless')
@@ -353,16 +356,22 @@ def setup_selenium_for_github_actions():
         if os.getenv('GITHUB_ACTIONS'):
             chrome_options.binary_location = '/usr/bin/google-chrome'
 
-        driver = webdriver.Chrome(options=chrome_options)
+        # Use webdriver-manager to automatically download and manage ChromeDriver
+        logging.info("🔧 Using webdriver-manager to install matching ChromeDriver...")
+        service = Service(ChromeDriverManager().install())
+        
+        driver = webdriver.Chrome(service=service, options=chrome_options)
         driver.set_page_load_timeout(30)
+        
+        logging.info("✅ ChromeDriver successfully initialized")
         return driver
 
-    except NameError:
-        logging.error("❌ Selenium is not installed. Please install it with 'pip install selenium'")
+    except ImportError as e:
+        logging.error(f"❌ Missing required package: {e}")
+        logging.error("   Please install: pip install selenium webdriver-manager")
         return None
     except Exception as e:
         logging.error(f"❌ Error setting up Chrome driver: {e}")
-        logging.error("   Make sure ChromeDriver is installed and accessible in your system's PATH")
         return None
 
 def scrape_ntb_usd_rates(logger):
