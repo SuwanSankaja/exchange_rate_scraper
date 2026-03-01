@@ -9,6 +9,9 @@ python-dotenv>=1.0.0
 selenium>=4.15.0
 webdriver-manager>=4.0.0
 
+# PDF parsing for HSBC
+PyPDF2>=3.0.0
+
 # Optional but recommended for better parsing
 lxml>=4.9.0
 html5lib>=1.1
