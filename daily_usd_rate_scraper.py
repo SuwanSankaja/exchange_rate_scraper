@@ -10,7 +10,6 @@ import requests
 from bs4 import BeautifulSoup
 import pandas as pd
 import re
-import io
 from datetime import datetime
 import time
 from pymongo import MongoClient, ASCENDING
@@ -33,11 +32,6 @@ try:
 except ImportError:
     pass
 
-# PyPDF2 for HSBC
-try:
-    import PyPDF2
-except ImportError:
-    PyPDF2 = None
 
 # Load environment variables
 load_dotenv()
@@ -548,53 +542,6 @@ def scrape_peoples_bank_rates(logger):
         return None
 
 
-def scrape_hsbc_rates(logger):
-    """Scrape USD exchange rates from HSBC PDF"""
-    url = "https://www.hsbc.lk/content/dam/hsbc/lk/documents/tariffs/foreign-exchange-rates.pdf"
-    try:
-        logger.info("🏦 Scraping HSBC (PDF)...")
-
-        if PyPDF2 is None:
-            logger.error("  ❌ PyPDF2 not installed. Install with: pip install PyPDF2")
-            return None
-
-        response = requests.get(url, headers=HEADERS, timeout=15)
-        response.raise_for_status()
-
-        reader = PyPDF2.PdfReader(io.BytesIO(response.content))
-
-        for page in reader.pages:
-            text = page.extract_text()
-            if not text:
-                continue
-
-            for line in text.split('\n'):
-                # Look for the USD line
-                if CURRENCY in line and any(name in line for name in ['United States', 'USD']):
-                    numbers = re.findall(r'\d+\.\d+', line)
-                    exchange_rates = [float(num) for num in numbers if float(num) > 50]
-
-                    if len(exchange_rates) >= 2:
-                        result = {
-                            'bank': normalize_bank_name('HSBC Bank'),
-                            'currency': CURRENCY,
-                            'buying_rate': exchange_rates[0],
-                            'selling_rate': exchange_rates[1],
-                            'source': 'HSBC PDF',
-                            'timestamp': datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
-                            'source_url': url
-                        }
-                        logger.info(f"  ✅ HSBC - Buy: {result['buying_rate']}, Sell: {result['selling_rate']}")
-                        return result
-
-        logger.warning(f"  ⚠️ {CURRENCY} not found in HSBC PDF")
-        return None
-
-    except Exception as e:
-        logger.error(f"  ❌ Error scraping HSBC PDF: {e}")
-        return None
-
-
 def scrape_hnb_rates(logger, screenshots_dir):
     """Scrape USD exchange rates from HNB website using Selenium"""
     url = "https://www.hnb.lk/"
@@ -606,72 +553,39 @@ def scrape_hnb_rates(logger, screenshots_dir):
             return None
 
         driver.get(url)
-        wait = WebDriverWait(driver, 20)
 
-        # Strategy 1: Look for exchange rate elements on HNB page
+        # HNB renders currency rates into a shared carousel widget via JS.
+        # A fixed sleep is a race: not every currency (e.g. EUR) is always
+        # populated in time, causing intermittent false "not found" results.
+        # Poll page_source until this currency's own rate pair shows up.
+        rate_pattern = re.compile(r'(?i)(?:USD|United States).*?(\d{2,3}\.\d{1,4}).*?(\d{2,3}\.\d{1,4})')
         try:
-            wait.until(
-                EC.presence_of_all_elements_located((By.XPATH, "//*[contains(text(), 'USD') or contains(text(), 'Exchange') or contains(text(), 'Rate')]"))
-            )
-            time.sleep(5)
-
-            aud_elements = driver.find_elements(By.XPATH, "//*[contains(text(), 'USD')]")
-            for element in aud_elements:
-                parent = element
-                for _ in range(5):
-                    try:
-                        parent_text = parent.text
-                        numbers = re.findall(r'(\d{2,3}\.\d{1,4})', parent_text)
-                        valid_rates = [float(num) for num in numbers if 100 <= float(num) <= 500]
-
-                        if len(valid_rates) >= 2:
-                            valid_rates.sort()
-                            result = {
-                                'bank': normalize_bank_name('Hatton National Bank'),
-                                'currency': CURRENCY,
-                                'buying_rate': valid_rates[0],
-                                'selling_rate': valid_rates[1],
-                                'source': 'HNB Direct',
-                                'timestamp': datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
-                                'source_url': url
-                            }
-                            logger.info(f"  ✅ HNB - Buy: {result['buying_rate']}, Sell: {result['selling_rate']}")
-                            return result
-                        parent = parent.find_element(By.XPATH, "..")
-                    except:
-                        break
+            WebDriverWait(driver, 25).until(lambda d: rate_pattern.search(d.page_source))
         except TimeoutException:
-            pass
+            logger.warning(f"  \u26a0\ufe0f Timed out waiting for {CURRENCY} rates to render on HNB")
 
-        # Strategy 2: Search page source
-        try:
-            page_source = driver.page_source
-            aud_pattern = r'(?i)(?:USD|United States).*?(\d{2,3}\.\d{1,4}).*?(\d{2,3}\.\d{1,4})'
-            matches = re.findall(aud_pattern, page_source)
+        match = rate_pattern.search(driver.page_source)
+        if match:
+            rates = [float(g) for g in match.groups() if 100 <= float(g) <= 500]
+            if len(rates) >= 2:
+                rates.sort()
+                result = {
+                    'bank': normalize_bank_name('Hatton National Bank'),
+                    'currency': CURRENCY,
+                    'buying_rate': rates[0],
+                    'selling_rate': rates[1],
+                    'source': 'HNB Direct',
+                    'timestamp': datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
+                    'source_url': url
+                }
+                logger.info(f"  \u2705 HNB - Buy: {result['buying_rate']}, Sell: {result['selling_rate']}")
+                return result
 
-            for match in matches:
-                rates = [float(rate) for rate in match if 100 <= float(rate) <= 500]
-                if len(rates) >= 2:
-                    rates.sort()
-                    result = {
-                        'bank': normalize_bank_name('Hatton National Bank'),
-                        'currency': CURRENCY,
-                        'buying_rate': rates[0],
-                        'selling_rate': rates[1],
-                        'source': 'HNB Direct',
-                        'timestamp': datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
-                        'source_url': url
-                    }
-                    logger.info(f"  ✅ HNB - Buy: {result['buying_rate']}, Sell: {result['selling_rate']}")
-                    return result
-        except Exception:
-            pass
-
-        logger.warning("  ⚠️ HNB scraping failed")
+        logger.warning("  \u26a0\ufe0f HNB scraping failed")
         return None
 
     except Exception as e:
-        logger.error(f"  ❌ Error scraping HNB: {e}")
+        logger.error(f"  \u274c Error scraping HNB: {e}")
         return None
     finally:
         if driver:
@@ -680,7 +594,7 @@ def scrape_hnb_rates(logger, screenshots_dir):
 
 def scrape_ntb_rates(logger, screenshots_dir):
     """Scrape USD exchange rates from NTB website using text parsing"""
-    url = "https://www.nationstrust.com/foreign-exchange-rates"
+    url = "https://www.nationstrust.com/exchange-rates"
     try:
         logger.info("🏦 Scraping NTB...")
         response = requests.get(url, headers=HEADERS, timeout=15)
@@ -731,6 +645,201 @@ def scrape_ntb_rates(logger, screenshots_dir):
     except Exception as e:
         logger.error(f"  ❌ Error scraping NTB: {e}")
         return None
+
+
+def scrape_cbsl_rates(logger):
+    """Scrape USD exchange rates from the Central Bank of Sri Lanka (indicative TT rate)"""
+    url = f"https://www.cbsl.gov.lk/cbsl_custom/charts/{CURRENCY.lower()}/indexsmall.php"
+    try:
+        logger.info("🏦 Scraping Central Bank of Sri Lanka...")
+        response = requests.get(url, headers=HEADERS, timeout=15)
+        response.raise_for_status()
+
+        soup = BeautifulSoup(response.content, 'html.parser')
+        buying_rate = None
+        selling_rate = None
+
+        for p in soup.find_all('p'):
+            text = p.get_text(' ', strip=True)
+            if text.startswith('Buy'):
+                match = re.search(r'(\d+\.\d+)', text)
+                if match:
+                    buying_rate = float(match.group(1))
+            elif text.startswith('Sell'):
+                match = re.search(r'(\d+\.\d+)', text)
+                if match:
+                    selling_rate = float(match.group(1))
+
+        if buying_rate is not None and selling_rate is not None:
+            result = {
+                'bank': normalize_bank_name('Central Bank of Sri Lanka'),
+                'currency': CURRENCY,
+                'buying_rate': buying_rate,
+                'selling_rate': selling_rate,
+                'source': 'CBSL Direct',
+                'timestamp': datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
+                'source_url': url
+            }
+            logger.info(f"  \u2705 CBSL - Buy: {result['buying_rate']}, Sell: {result['selling_rate']}")
+            return result
+
+        logger.warning(f"  \u26a0\ufe0f {CURRENCY} buy/sell rates not found for CBSL")
+        return None
+
+    except Exception as e:
+        logger.error(f"  \u274c Error scraping CBSL: {e}")
+        return None
+
+
+def scrape_boc_rates_selenium(logger):
+    """Selenium fallback for Bank of Ceylon.
+
+    BOC sits behind CloudFront and returns 403 to plain HTTP clients from
+    GitHub Actions runners; a real headless-Chrome session gets through.
+    """
+    url = "https://www.boc.lk/rates-tariff"
+    driver = None
+    try:
+        logger.info("  \U0001f501 Retrying BOC with Selenium...")
+        driver = setup_selenium_for_github_actions()
+        if not driver:
+            return None
+
+        driver.get(url)
+        WebDriverWait(driver, 20).until(EC.presence_of_element_located((By.TAG_NAME, "table")))
+        time.sleep(2)
+
+        for row in driver.find_elements(By.TAG_NAME, "tr"):
+            cell_texts = [c.text.strip() for c in row.find_elements(By.TAG_NAME, "td")]
+            if cell_texts and cell_texts[0] == CURRENCY and len(cell_texts) >= 3:
+                numeric_values = []
+                for cell in cell_texts[1:]:
+                    for num in re.findall(r'\d+\.\d+', cell):
+                        if float(num) > 50:
+                            numeric_values.append(float(num))
+
+                if len(numeric_values) >= 2:
+                    result = {
+                        'bank': normalize_bank_name('Bank of Ceylon'),
+                        'currency': CURRENCY,
+                        'buying_rate': numeric_values[0],
+                        'selling_rate': numeric_values[1],
+                        'source': 'BOC Direct (Selenium)',
+                        'timestamp': datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
+                        'source_url': url
+                    }
+                    logger.info(f"  \u2705 BOC (Selenium) - Buy: {result['buying_rate']}, Sell: {result['selling_rate']}")
+                    return result
+
+        logger.warning(f"  \u26a0\ufe0f {CURRENCY} not found in BOC tables (Selenium)")
+        return None
+
+    except Exception as e:
+        logger.error(f"  \u274c Selenium fallback error for BOC: {e}")
+        return None
+    finally:
+        if driver:
+            driver.quit()
+
+
+def scrape_combank_rates_selenium(logger):
+    """Selenium fallback for Commercial Bank (see scrape_boc_rates_selenium)."""
+    url = "https://www.combank.lk/rates-tariff#exchange-rates"
+    driver = None
+    try:
+        logger.info("  \U0001f501 Retrying Commercial Bank with Selenium...")
+        driver = setup_selenium_for_github_actions()
+        if not driver:
+            return None
+
+        driver.get(url)
+        WebDriverWait(driver, 20).until(EC.presence_of_element_located((By.TAG_NAME, "table")))
+        time.sleep(2)
+
+        for row in driver.find_elements(By.TAG_NAME, "tr"):
+            cell_texts = [c.text.strip() for c in row.find_elements(By.TAG_NAME, "td")]
+            if cell_texts and any('US DOLLAR' in c.upper() for c in cell_texts):
+                numeric_values = []
+                for cell in cell_texts[1:]:
+                    for num in re.findall(r'\d+\.\d+', cell):
+                        if float(num) > 50:
+                            numeric_values.append(float(num))
+
+                if len(numeric_values) >= 2:
+                    result = {
+                        'bank': normalize_bank_name('Commercial Bank'),
+                        'currency': CURRENCY,
+                        'buying_rate': numeric_values[0],
+                        'selling_rate': numeric_values[1],
+                        'source': 'Combank Direct (Selenium)',
+                        'timestamp': datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
+                        'source_url': url
+                    }
+                    logger.info(f"  \u2705 Combank (Selenium) - Buy: {result['buying_rate']}, Sell: {result['selling_rate']}")
+                    return result
+
+        logger.warning(f"  \u26a0\ufe0f {CURRENCY} not found in Combank tables (Selenium)")
+        return None
+
+    except Exception as e:
+        logger.error(f"  \u274c Selenium fallback error for Combank: {e}")
+        return None
+    finally:
+        if driver:
+            driver.quit()
+
+
+def scrape_ntb_rates_selenium(logger):
+    """Selenium fallback for Nations Trust Bank (see scrape_boc_rates_selenium)."""
+    url = "https://www.nationstrust.com/exchange-rates"
+    driver = None
+    try:
+        logger.info("  \U0001f501 Retrying NTB with Selenium...")
+        driver = setup_selenium_for_github_actions()
+        if not driver:
+            return None
+
+        driver.get(url)
+        WebDriverWait(driver, 20).until(lambda d: CURRENCY in d.page_source)
+        time.sleep(2)
+
+        page_text = driver.find_element(By.TAG_NAME, "body").text
+        lines = [l.strip() for l in page_text.split('\n') if l.strip()]
+
+        for i, line in enumerate(lines):
+            if line == CURRENCY:
+                numeric_values = []
+                for j in range(i + 1, min(i + 10, len(lines))):
+                    try:
+                        val = float(lines[j].replace(',', ''))
+                        if val > 50:
+                            numeric_values.append(val)
+                    except ValueError:
+                        break
+
+                if len(numeric_values) >= 2:
+                    buy_idx, sell_idx = (2, 3) if len(numeric_values) >= 4 else (0, 1)
+                    result = {
+                        'bank': normalize_bank_name('Nations Trust Bank'),
+                        'currency': CURRENCY,
+                        'buying_rate': numeric_values[buy_idx],
+                        'selling_rate': numeric_values[sell_idx],
+                        'source': 'NTB Direct (Selenium)',
+                        'timestamp': datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
+                        'source_url': url
+                    }
+                    logger.info(f"  \u2705 NTB (Selenium) - Buy: {result['buying_rate']}, Sell: {result['selling_rate']}")
+                    return result
+
+        logger.warning(f"  \u26a0\ufe0f {CURRENCY} rates not found in NTB text (Selenium)")
+        return None
+
+    except Exception as e:
+        logger.error(f"  \u274c Selenium fallback error for NTB: {e}")
+        return None
+    finally:
+        if driver:
+            driver.quit()
 
 
 def scrape_sampath_rates(logger, screenshots_dir):
@@ -871,18 +980,21 @@ def main():
         all_bank_data = []
         failed_banks = []
 
-        # Step 1: BOC (requests + BS4)
-        # Step 1: BOC (requests + BS4)
+        # Step 1: BOC (requests + BS4, falls back to Selenium if WAF-blocked)
         logger.info(f"📡 Step 1/8: Bank of Ceylon")
         result = scrape_boc_rates(logger)
+        if not result or not result.get('buying_rate'):
+            result = scrape_boc_rates_selenium(logger)
         if result and result.get('buying_rate'):
             all_bank_data.append(result)
         else:
             failed_banks.append('BOC')
 
-        # Step 2: Commercial Bank (requests + BS4)
+        # Step 2: Commercial Bank (requests + BS4, falls back to Selenium if WAF-blocked)
         logger.info(f"📡 Step 2/8: Commercial Bank")
         result = scrape_combank_rates(logger)
+        if not result or not result.get('buying_rate'):
+            result = scrape_combank_rates_selenium(logger)
         if result and result.get('buying_rate'):
             all_bank_data.append(result)
         else:
@@ -904,37 +1016,39 @@ def main():
         else:
             failed_banks.append("People's Bank")
 
-        # Step 5: HSBC (PyPDF2)
-        logger.info(f"📡 Step 5/8: HSBC")
-        result = scrape_hsbc_rates(logger)
-        if result and result.get('buying_rate'):
-            all_bank_data.append(result)
-        else:
-            failed_banks.append('HSBC')
-
-        # Step 6: HNB (Selenium)
-        logger.info(f"📡 Step 6/8: Hatton National Bank")
+        # Step 5: HNB (Selenium)
+        logger.info(f"📡 Step 5/8: Hatton National Bank")
         result = scrape_hnb_rates(logger, screenshots_dir)
         if result and result.get('buying_rate'):
             all_bank_data.append(result)
         else:
             failed_banks.append('HNB')
 
-        # Step 7: NTB (text parsing)
-        logger.info(f"📡 Step 7/8: Nations Trust Bank")
+        # Step 6: NTB (text parsing, falls back to Selenium if WAF-blocked)
+        logger.info(f"📡 Step 6/8: Nations Trust Bank")
         result = scrape_ntb_rates(logger, screenshots_dir)
+        if not result or not result.get('buying_rate'):
+            result = scrape_ntb_rates_selenium(logger)
         if result and result.get('buying_rate'):
             all_bank_data.append(result)
         else:
             failed_banks.append('NTB')
 
-        # Step 8: Sampath Bank (JSON API)
-        logger.info(f"📡 Step 8/8: Sampath Bank")
+        # Step 7: Sampath Bank (JSON API)
+        logger.info(f"📡 Step 7/8: Sampath Bank")
         result = scrape_sampath_rates(logger, screenshots_dir)
         if result and result.get('buying_rate'):
             all_bank_data.append(result)
         else:
             failed_banks.append('Sampath Bank')
+
+        # Step 8: Central Bank of Sri Lanka (requests + BS4)
+        logger.info(f"📡 Step 8/8: Central Bank of Sri Lanka")
+        result = scrape_cbsl_rates(logger)
+        if result and result.get('buying_rate'):
+            all_bank_data.append(result)
+        else:
+            failed_banks.append('CBSL')
 
         # Summary
         logger.info(f"\n📊 Scraping complete: {len(all_bank_data)}/8 banks successful")
