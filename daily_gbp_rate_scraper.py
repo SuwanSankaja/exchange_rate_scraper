@@ -691,11 +691,33 @@ def scrape_cbsl_rates(logger):
         return None
 
 
-def scrape_boc_rates_selenium(logger):
+def _capture_selenium_diagnostics(driver, logger, screenshots_dir, name):
+    """On a Selenium scrape failure, log what the site actually served (title/body
+    snippet) and save a screenshot - the only way to tell a real block/CAPTCHA
+    page apart from a plain timeout without direct access to the CI runner.
+    """
+    try:
+        title = driver.title
+        body_text = driver.find_element(By.TAG_NAME, "body").text.strip().replace('\n', ' ')[:200]
+        logger.warning(f"  📄 {name} page title: {title!r} | body snippet: {body_text!r}")
+    except Exception:
+        pass
+    if screenshots_dir:
+        try:
+            path = Path(screenshots_dir) / f"{name.lower().replace(' ', '_')}_selenium_fail.png"
+            driver.save_screenshot(str(path))
+            logger.warning(f"  📸 Saved failure screenshot to {path}")
+        except Exception:
+            pass
+
+
+def scrape_boc_rates_selenium(logger, screenshots_dir=None):
     """Selenium fallback for Bank of Ceylon.
 
     BOC sits behind CloudFront and returns 403 to plain HTTP clients from
-    GitHub Actions runners; a real headless-Chrome session gets through.
+    GitHub Actions runner IPs. A real Chrome session sometimes gets through,
+    but not always - if this also fails, the captured page title/screenshot
+    (see _capture_selenium_diagnostics) shows what was actually served.
     """
     url = "https://www.boc.lk/rates-tariff"
     driver = None
@@ -732,18 +754,20 @@ def scrape_boc_rates_selenium(logger):
                     return result
 
         logger.warning(f"  \u26a0\ufe0f {CURRENCY} not found in BOC tables (Selenium)")
+        _capture_selenium_diagnostics(driver, logger, screenshots_dir, 'BOC')
         return None
 
     except Exception as e:
-        logger.error(f"  \u274c Selenium fallback error for BOC: {e}")
+        logger.error(f"  \u274c Selenium fallback error for BOC: {type(e).__name__}")
+        _capture_selenium_diagnostics(driver, logger, screenshots_dir, 'BOC')
         return None
     finally:
         if driver:
             driver.quit()
 
 
-def scrape_combank_rates_selenium(logger):
-    """Selenium fallback for Commercial Bank (see scrape_boc_rates_selenium)."""
+def scrape_combank_rates_selenium(logger, screenshots_dir=None):
+    """Selenium fallback for Commercial Bank - same CloudFront/WAF caveats as scrape_boc_rates_selenium."""
     url = "https://www.combank.lk/rates-tariff#exchange-rates"
     driver = None
     try:
@@ -779,18 +803,20 @@ def scrape_combank_rates_selenium(logger):
                     return result
 
         logger.warning(f"  \u26a0\ufe0f {CURRENCY} not found in Combank tables (Selenium)")
+        _capture_selenium_diagnostics(driver, logger, screenshots_dir, 'Combank')
         return None
 
     except Exception as e:
-        logger.error(f"  \u274c Selenium fallback error for Combank: {e}")
+        logger.error(f"  \u274c Selenium fallback error for Combank: {type(e).__name__}")
+        _capture_selenium_diagnostics(driver, logger, screenshots_dir, 'Combank')
         return None
     finally:
         if driver:
             driver.quit()
 
 
-def scrape_ntb_rates_selenium(logger):
-    """Selenium fallback for Nations Trust Bank (see scrape_boc_rates_selenium)."""
+def scrape_ntb_rates_selenium(logger, screenshots_dir=None):
+    """Selenium fallback for Nations Trust Bank - same CloudFront/WAF caveats as scrape_boc_rates_selenium."""
     url = "https://www.nationstrust.com/exchange-rates"
     driver = None
     try:
@@ -800,22 +826,30 @@ def scrape_ntb_rates_selenium(logger):
             return None
 
         driver.get(url)
-        WebDriverWait(driver, 20).until(lambda d: CURRENCY in d.page_source)
-        time.sleep(2)
 
-        page_text = driver.find_element(By.TAG_NAME, "body").text
-        lines = [l.strip() for l in page_text.split('\n') if l.strip()]
+        # Dismiss the cookie-consent modal if present.
+        try:
+            WebDriverWait(driver, 5).until(
+                EC.element_to_be_clickable((By.XPATH, "//button[contains(text(), 'Accept')]"))
+            ).click()
+        except TimeoutException:
+            pass
 
-        for i, line in enumerate(lines):
-            if line == CURRENCY:
+        WebDriverWait(driver, 20).until(EC.presence_of_element_located((By.TAG_NAME, "table")))
+        time.sleep(1)
+
+        # NTB's table cells report empty via Selenium's visibility-gated
+        # .text even though the DOM has real values, so parse the raw HTML
+        # with BeautifulSoup instead of driver/element .text.
+        soup = BeautifulSoup(driver.page_source, 'html.parser')
+        for row in soup.find_all('tr'):
+            cell_texts = [c.get_text(strip=True) for c in row.find_all('td')]
+            if cell_texts and cell_texts[0] == CURRENCY:
                 numeric_values = []
-                for j in range(i + 1, min(i + 10, len(lines))):
-                    try:
-                        val = float(lines[j].replace(',', ''))
-                        if val > 50:
-                            numeric_values.append(val)
-                    except ValueError:
-                        break
+                for cell in cell_texts[1:]:
+                    for num in re.findall(r'\d+\.\d+', cell.replace(',', '')):
+                        if float(num) > 50:
+                            numeric_values.append(float(num))
 
                 if len(numeric_values) >= 2:
                     buy_idx, sell_idx = (2, 3) if len(numeric_values) >= 4 else (0, 1)
@@ -831,11 +865,13 @@ def scrape_ntb_rates_selenium(logger):
                     logger.info(f"  \u2705 NTB (Selenium) - Buy: {result['buying_rate']}, Sell: {result['selling_rate']}")
                     return result
 
-        logger.warning(f"  \u26a0\ufe0f {CURRENCY} rates not found in NTB text (Selenium)")
+        logger.warning(f"  \u26a0\ufe0f {CURRENCY} rates not found in NTB table (Selenium)")
+        _capture_selenium_diagnostics(driver, logger, screenshots_dir, 'NTB')
         return None
 
     except Exception as e:
-        logger.error(f"  \u274c Selenium fallback error for NTB: {e}")
+        logger.error(f"  \u274c Selenium fallback error for NTB: {type(e).__name__}")
+        _capture_selenium_diagnostics(driver, logger, screenshots_dir, 'NTB')
         return None
     finally:
         if driver:
@@ -984,7 +1020,7 @@ def main():
         logger.info(f"📡 Step 1/8: Bank of Ceylon")
         result = scrape_boc_rates(logger)
         if not result or not result.get('buying_rate'):
-            result = scrape_boc_rates_selenium(logger)
+            result = scrape_boc_rates_selenium(logger, screenshots_dir)
         if result and result.get('buying_rate'):
             all_bank_data.append(result)
         else:
@@ -994,7 +1030,7 @@ def main():
         logger.info(f"📡 Step 2/8: Commercial Bank")
         result = scrape_combank_rates(logger)
         if not result or not result.get('buying_rate'):
-            result = scrape_combank_rates_selenium(logger)
+            result = scrape_combank_rates_selenium(logger, screenshots_dir)
         if result and result.get('buying_rate'):
             all_bank_data.append(result)
         else:
@@ -1028,7 +1064,7 @@ def main():
         logger.info(f"📡 Step 6/8: Nations Trust Bank")
         result = scrape_ntb_rates(logger, screenshots_dir)
         if not result or not result.get('buying_rate'):
-            result = scrape_ntb_rates_selenium(logger)
+            result = scrape_ntb_rates_selenium(logger, screenshots_dir)
         if result and result.get('buying_rate'):
             all_bank_data.append(result)
         else:
