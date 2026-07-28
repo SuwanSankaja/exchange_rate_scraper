@@ -20,6 +20,7 @@ import logging
 from pathlib import Path
 from dotenv import load_dotenv
 import json
+from bank_http import get_bank_response
 
 # Selenium imports
 try:
@@ -359,8 +360,9 @@ def scrape_boc_rates(logger):
     url = "https://www.boc.lk/rates-tariff"
     try:
         logger.info("🏦 Scraping Bank of Ceylon...")
-        response = requests.get(url, headers=HEADERS, timeout=15)
-        response.raise_for_status()
+        response, used_fallback = get_bank_response(
+            url, HEADERS, logger, "BOC"
+        )
 
         soup = BeautifulSoup(response.content, 'html.parser')
         tables = soup.find_all('table')
@@ -386,7 +388,7 @@ def scrape_boc_rates(logger):
                             'currency': CURRENCY,
                             'buying_rate': numeric_values[0],
                             'selling_rate': numeric_values[1],
-                            'source': 'BOC Direct',
+                            'source': 'BOC Direct' if not used_fallback else 'BOC via Google Translate',
                             'timestamp': datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
                             'source_url': url
                         }
@@ -402,45 +404,29 @@ def scrape_boc_rates(logger):
 
 
 def scrape_combank_rates(logger):
-    """Scrape GBP exchange rates from Commercial Bank website"""
-    url = "https://www.combank.lk/rates-tariff#exchange-rates"
+    """Scrape GBP exchange rates from Commercial Bank's public JSON API."""
+    url = "https://www.combank.lk/api/exchange-rates/"
     try:
-        logger.info("🏦 Scraping Commercial Bank...")
-        response = requests.get(url, headers=HEADERS, timeout=15)
-        response.raise_for_status()
+        logger.info("🏦 Scraping Commercial Bank (API)...")
+        response, used_fallback = get_bank_response(
+            url, HEADERS, logger, "Commercial Bank"
+        )
 
-        soup = BeautifulSoup(response.content, 'html.parser')
-        tables = soup.find_all('table')
+        for rate in response.json():
+            if rate.get('excode') == CURRENCY:
+                result = {
+                    'bank': normalize_bank_name('Commercial Bank'),
+                    'currency': CURRENCY,
+                    'buying_rate': float(rate['currency_buying_rate']),
+                    'selling_rate': float(rate['currency_selling_rate']),
+                    'source': 'Combank API' if not used_fallback else 'Combank API via Google Translate',
+                    'timestamp': datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
+                    'source_url': url
+                }
+                logger.info(f"  ✅ Combank - Buy: {result['buying_rate']}, Sell: {result['selling_rate']}")
+                return result
 
-        for table in tables:
-            rows = table.find_all('tr')
-            for row in rows:
-                cells = row.find_all(['td', 'th'])
-                row_text = [cell.get_text(strip=True) for cell in cells]
-
-                # Combank uses 'POUND'
-                if len(row_text) > 0 and any('POUND' in cell.upper() for cell in row_text):
-                    numeric_values = []
-                    for cell in row_text[1:]:
-                        numbers = re.findall(r'\d+\.\d+', cell)
-                        for num in numbers:
-                            if float(num) > 50:
-                                numeric_values.append(float(num))
-
-                    if len(numeric_values) >= 2:
-                        result = {
-                            'bank': normalize_bank_name('Commercial Bank'),
-                            'currency': CURRENCY,
-                            'buying_rate': numeric_values[0],
-                            'selling_rate': numeric_values[1],
-                            'source': 'Combank Direct',
-                            'timestamp': datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
-                            'source_url': url
-                        }
-                        logger.info(f"  ✅ Combank - Buy: {result['buying_rate']}, Sell: {result['selling_rate']}")
-                        return result
-
-        logger.warning(f"  ⚠️ {CURRENCY} not found in Combank tables")
+        logger.warning(f"  ⚠️ {CURRENCY} not found in Combank API")
         return None
 
     except Exception as e:
@@ -597,8 +583,9 @@ def scrape_ntb_rates(logger, screenshots_dir):
     url = "https://www.nationstrust.com/exchange-rates"
     try:
         logger.info("🏦 Scraping NTB...")
-        response = requests.get(url, headers=HEADERS, timeout=15)
-        response.raise_for_status()
+        response, used_fallback = get_bank_response(
+            url, HEADERS, logger, "NTB"
+        )
 
         soup = BeautifulSoup(response.content, 'html.parser')
         page_text = soup.get_text()
@@ -632,7 +619,7 @@ def scrape_ntb_rates(logger, screenshots_dir):
                         'currency': CURRENCY,
                         'buying_rate': numeric_values[buy_idx],
                         'selling_rate': numeric_values[sell_idx],
-                        'source': 'NTB Direct',
+                        'source': 'NTB Direct' if not used_fallback else 'NTB via Google Translate',
                         'timestamp': datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
                         'source_url': url
                     }
@@ -829,12 +816,7 @@ def main():
         all_bank_data = []
         failed_banks = []
 
-        # Step 1: BOC (requests + BS4)
-        # BOC sits behind CloudFront, which hard-blocks GitHub Actions runner
-        # IPs at the edge (generic "Request blocked" page, no JS challenge to
-        # solve) - a Selenium retry gets the identical block page, so there's
-        # no fallback here; this just succeeds or fails per-run depending on
-        # whether the runner's IP is flagged that day.
+        # Step 1: BOC (direct page with a WAF-safe fallback)
         logger.info(f"📡 Step 1/8: Bank of Ceylon")
         result = scrape_boc_rates(logger)
         if result and result.get('buying_rate'):
@@ -842,8 +824,7 @@ def main():
         else:
             failed_banks.append('BOC')
 
-        # Step 2: Commercial Bank (requests + BS4)
-        # Same CloudFront edge-block situation as BOC - see comment above.
+        # Step 2: Commercial Bank (public JSON API with a WAF-safe fallback)
         logger.info(f"📡 Step 2/8: Commercial Bank")
         result = scrape_combank_rates(logger)
         if result and result.get('buying_rate'):
@@ -875,8 +856,7 @@ def main():
         else:
             failed_banks.append('HNB')
 
-        # Step 6: NTB (text parsing)
-        # Same CloudFront edge-block situation as BOC - see comment above.
+        # Step 6: NTB (direct page with a WAF-safe fallback)
         logger.info(f"📡 Step 6/8: Nations Trust Bank")
         result = scrape_ntb_rates(logger, screenshots_dir)
         if result and result.get('buying_rate'):
