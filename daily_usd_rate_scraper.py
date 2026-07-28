@@ -691,193 +691,6 @@ def scrape_cbsl_rates(logger):
         return None
 
 
-def _capture_selenium_diagnostics(driver, logger, screenshots_dir, name):
-    """On a Selenium scrape failure, log what the site actually served (title/body
-    snippet) and save a screenshot - the only way to tell a real block/CAPTCHA
-    page apart from a plain timeout without direct access to the CI runner.
-    """
-    try:
-        title = driver.title
-        body_text = driver.find_element(By.TAG_NAME, "body").text.strip().replace('\n', ' ')[:200]
-        logger.warning(f"  📄 {name} page title: {title!r} | body snippet: {body_text!r}")
-    except Exception:
-        pass
-    if screenshots_dir:
-        try:
-            path = Path(screenshots_dir) / f"{name.lower().replace(' ', '_')}_selenium_fail.png"
-            driver.save_screenshot(str(path))
-            logger.warning(f"  📸 Saved failure screenshot to {path}")
-        except Exception:
-            pass
-
-
-def scrape_boc_rates_selenium(logger, screenshots_dir=None):
-    """Selenium fallback for Bank of Ceylon.
-
-    BOC sits behind CloudFront and returns 403 to plain HTTP clients from
-    GitHub Actions runner IPs. A real Chrome session sometimes gets through,
-    but not always - if this also fails, the captured page title/screenshot
-    (see _capture_selenium_diagnostics) shows what was actually served.
-    """
-    url = "https://www.boc.lk/rates-tariff"
-    driver = None
-    try:
-        logger.info("  \U0001f501 Retrying BOC with Selenium...")
-        driver = setup_selenium_for_github_actions()
-        if not driver:
-            return None
-
-        driver.get(url)
-        WebDriverWait(driver, 20).until(EC.presence_of_element_located((By.TAG_NAME, "table")))
-        time.sleep(2)
-
-        for row in driver.find_elements(By.TAG_NAME, "tr"):
-            cell_texts = [c.text.strip() for c in row.find_elements(By.TAG_NAME, "td")]
-            if cell_texts and cell_texts[0] == CURRENCY and len(cell_texts) >= 3:
-                numeric_values = []
-                for cell in cell_texts[1:]:
-                    for num in re.findall(r'\d+\.\d+', cell):
-                        if float(num) > 50:
-                            numeric_values.append(float(num))
-
-                if len(numeric_values) >= 2:
-                    result = {
-                        'bank': normalize_bank_name('Bank of Ceylon'),
-                        'currency': CURRENCY,
-                        'buying_rate': numeric_values[0],
-                        'selling_rate': numeric_values[1],
-                        'source': 'BOC Direct (Selenium)',
-                        'timestamp': datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
-                        'source_url': url
-                    }
-                    logger.info(f"  \u2705 BOC (Selenium) - Buy: {result['buying_rate']}, Sell: {result['selling_rate']}")
-                    return result
-
-        logger.warning(f"  \u26a0\ufe0f {CURRENCY} not found in BOC tables (Selenium)")
-        _capture_selenium_diagnostics(driver, logger, screenshots_dir, 'BOC')
-        return None
-
-    except Exception as e:
-        logger.error(f"  \u274c Selenium fallback error for BOC: {type(e).__name__}")
-        _capture_selenium_diagnostics(driver, logger, screenshots_dir, 'BOC')
-        return None
-    finally:
-        if driver:
-            driver.quit()
-
-
-def scrape_combank_rates_selenium(logger, screenshots_dir=None):
-    """Selenium fallback for Commercial Bank - same CloudFront/WAF caveats as scrape_boc_rates_selenium."""
-    url = "https://www.combank.lk/rates-tariff#exchange-rates"
-    driver = None
-    try:
-        logger.info("  \U0001f501 Retrying Commercial Bank with Selenium...")
-        driver = setup_selenium_for_github_actions()
-        if not driver:
-            return None
-
-        driver.get(url)
-        WebDriverWait(driver, 20).until(EC.presence_of_element_located((By.TAG_NAME, "table")))
-        time.sleep(2)
-
-        for row in driver.find_elements(By.TAG_NAME, "tr"):
-            cell_texts = [c.text.strip() for c in row.find_elements(By.TAG_NAME, "td")]
-            if cell_texts and any('US DOLLAR' in c.upper() for c in cell_texts):
-                numeric_values = []
-                for cell in cell_texts[1:]:
-                    for num in re.findall(r'\d+\.\d+', cell):
-                        if float(num) > 50:
-                            numeric_values.append(float(num))
-
-                if len(numeric_values) >= 2:
-                    result = {
-                        'bank': normalize_bank_name('Commercial Bank'),
-                        'currency': CURRENCY,
-                        'buying_rate': numeric_values[0],
-                        'selling_rate': numeric_values[1],
-                        'source': 'Combank Direct (Selenium)',
-                        'timestamp': datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
-                        'source_url': url
-                    }
-                    logger.info(f"  \u2705 Combank (Selenium) - Buy: {result['buying_rate']}, Sell: {result['selling_rate']}")
-                    return result
-
-        logger.warning(f"  \u26a0\ufe0f {CURRENCY} not found in Combank tables (Selenium)")
-        _capture_selenium_diagnostics(driver, logger, screenshots_dir, 'Combank')
-        return None
-
-    except Exception as e:
-        logger.error(f"  \u274c Selenium fallback error for Combank: {type(e).__name__}")
-        _capture_selenium_diagnostics(driver, logger, screenshots_dir, 'Combank')
-        return None
-    finally:
-        if driver:
-            driver.quit()
-
-
-def scrape_ntb_rates_selenium(logger, screenshots_dir=None):
-    """Selenium fallback for Nations Trust Bank - same CloudFront/WAF caveats as scrape_boc_rates_selenium."""
-    url = "https://www.nationstrust.com/exchange-rates"
-    driver = None
-    try:
-        logger.info("  \U0001f501 Retrying NTB with Selenium...")
-        driver = setup_selenium_for_github_actions()
-        if not driver:
-            return None
-
-        driver.get(url)
-
-        # Dismiss the cookie-consent modal if present.
-        try:
-            WebDriverWait(driver, 5).until(
-                EC.element_to_be_clickable((By.XPATH, "//button[contains(text(), 'Accept')]"))
-            ).click()
-        except TimeoutException:
-            pass
-
-        WebDriverWait(driver, 20).until(EC.presence_of_element_located((By.TAG_NAME, "table")))
-        time.sleep(1)
-
-        # NTB's table cells report empty via Selenium's visibility-gated
-        # .text even though the DOM has real values, so parse the raw HTML
-        # with BeautifulSoup instead of driver/element .text.
-        soup = BeautifulSoup(driver.page_source, 'html.parser')
-        for row in soup.find_all('tr'):
-            cell_texts = [c.get_text(strip=True) for c in row.find_all('td')]
-            if cell_texts and cell_texts[0] == CURRENCY:
-                numeric_values = []
-                for cell in cell_texts[1:]:
-                    for num in re.findall(r'\d+\.\d+', cell.replace(',', '')):
-                        if float(num) > 50:
-                            numeric_values.append(float(num))
-
-                if len(numeric_values) >= 2:
-                    buy_idx, sell_idx = (2, 3) if len(numeric_values) >= 4 else (0, 1)
-                    result = {
-                        'bank': normalize_bank_name('Nations Trust Bank'),
-                        'currency': CURRENCY,
-                        'buying_rate': numeric_values[buy_idx],
-                        'selling_rate': numeric_values[sell_idx],
-                        'source': 'NTB Direct (Selenium)',
-                        'timestamp': datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
-                        'source_url': url
-                    }
-                    logger.info(f"  \u2705 NTB (Selenium) - Buy: {result['buying_rate']}, Sell: {result['selling_rate']}")
-                    return result
-
-        logger.warning(f"  \u26a0\ufe0f {CURRENCY} rates not found in NTB table (Selenium)")
-        _capture_selenium_diagnostics(driver, logger, screenshots_dir, 'NTB')
-        return None
-
-    except Exception as e:
-        logger.error(f"  \u274c Selenium fallback error for NTB: {type(e).__name__}")
-        _capture_selenium_diagnostics(driver, logger, screenshots_dir, 'NTB')
-        return None
-    finally:
-        if driver:
-            driver.quit()
-
-
 def scrape_sampath_rates(logger, screenshots_dir):
     """Scrape USD exchange rates from Sampath Bank JSON API"""
     api_url = "https://www.sampath.lk/api/exchange-rates"
@@ -1016,21 +829,23 @@ def main():
         all_bank_data = []
         failed_banks = []
 
-        # Step 1: BOC (requests + BS4, falls back to Selenium if WAF-blocked)
+        # Step 1: BOC (requests + BS4)
+        # BOC sits behind CloudFront, which hard-blocks GitHub Actions runner
+        # IPs at the edge (generic "Request blocked" page, no JS challenge to
+        # solve) - a Selenium retry gets the identical block page, so there's
+        # no fallback here; this just succeeds or fails per-run depending on
+        # whether the runner's IP is flagged that day.
         logger.info(f"📡 Step 1/8: Bank of Ceylon")
         result = scrape_boc_rates(logger)
-        if not result or not result.get('buying_rate'):
-            result = scrape_boc_rates_selenium(logger, screenshots_dir)
         if result and result.get('buying_rate'):
             all_bank_data.append(result)
         else:
             failed_banks.append('BOC')
 
-        # Step 2: Commercial Bank (requests + BS4, falls back to Selenium if WAF-blocked)
+        # Step 2: Commercial Bank (requests + BS4)
+        # Same CloudFront edge-block situation as BOC - see comment above.
         logger.info(f"📡 Step 2/8: Commercial Bank")
         result = scrape_combank_rates(logger)
-        if not result or not result.get('buying_rate'):
-            result = scrape_combank_rates_selenium(logger, screenshots_dir)
         if result and result.get('buying_rate'):
             all_bank_data.append(result)
         else:
@@ -1060,11 +875,10 @@ def main():
         else:
             failed_banks.append('HNB')
 
-        # Step 6: NTB (text parsing, falls back to Selenium if WAF-blocked)
+        # Step 6: NTB (text parsing)
+        # Same CloudFront edge-block situation as BOC - see comment above.
         logger.info(f"📡 Step 6/8: Nations Trust Bank")
         result = scrape_ntb_rates(logger, screenshots_dir)
-        if not result or not result.get('buying_rate'):
-            result = scrape_ntb_rates_selenium(logger, screenshots_dir)
         if result and result.get('buying_rate'):
             all_bank_data.append(result)
         else:
