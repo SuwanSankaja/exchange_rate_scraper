@@ -64,9 +64,19 @@ TZ=Asia/Colombo
 
 ### 📊 **Data Sources**
 
-1. **Primary**: numbers.lk (multiple banks at once)
-2. **Enhanced**: Direct NTB scraping for verification/backup
-3. **Fallback**: Multiple Selenium strategies for robust data collection
+Rates come from the official websites/APIs of BOC, Commercial Bank, Amana Bank,
+People's Bank, HNB, Nations Trust Bank, Sampath Bank, and CBSL. BOC, Commercial
+Bank, CBSL, and NTB requests include a same-site referrer and can retry through
+the Google Translate web proxy when direct requests are blocked. Temporary
+HTTP failures are retried once. Commercial Bank also falls back to its published
+rates table when its JSON API is unavailable, using the same currency-note
+buying/selling pair as the API.
+
+An unavailable source is omitted from the current scrape and listed in
+`failed_banks` in each currency's summary. `coverage_status` distinguishes full
+coverage from a partial scrape. In particular, an empty BOC exchange-rate table
+is reported as a bank source outage; deposit-interest tables elsewhere on that
+page are never used as exchange rates.
 
 ## 🚀 Usage
 
@@ -84,6 +94,12 @@ You can manually trigger the workflow:
 4. Optional: Enable debug mode for extended logging
 
 ### Local Testing
+
+Run the offline regression tests without contacting banks or MongoDB:
+
+```bash
+python -m unittest discover -s tests -v
+```
 
 ```bash
 # Install dependencies

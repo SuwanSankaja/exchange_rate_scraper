@@ -1,6 +1,7 @@
 """HTTP helpers for bank sites that block cloud-hosted scraper traffic."""
 
-from urllib.parse import urlencode, urlsplit, urlunsplit
+import time
+from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
 import requests
 
@@ -24,9 +25,12 @@ def google_translate_url(url):
     if parsed.scheme != "https" or not parsed.hostname:
         raise ValueError("Only absolute HTTPS URLs can use the translation fallback")
 
-    proxy_host = parsed.hostname.replace(".", "-") + ".translate.goog"
+    proxy_host = parsed.hostname.replace("-", "--").replace(".", "-") + ".translate.goog"
+    query = [(key, value) for key, value in parse_qsl(parsed.query, keep_blank_values=True)
+             if key not in _TRANSLATE_QUERY]
+    query.extend(_TRANSLATE_QUERY.items())
     return urlunsplit(
-        ("https", proxy_host, parsed.path or "/", urlencode(_TRANSLATE_QUERY), "")
+        ("https", proxy_host, parsed.path or "/", urlencode(query), "")
     )
 
 
@@ -42,6 +46,24 @@ def _is_block_page(response):
     return any(marker in body_start for marker in _BLOCK_PAGE_MARKERS)
 
 
+def _get_with_retry(url, headers, timeout, logger, bank_name, proxy=False):
+    """Retry temporary server/proxy failures once, with a bounded delay."""
+    retry_statuses = {408, 429, 500, 502, 503, 504}
+    if proxy:
+        # Translate intermittently returns 400/403 for otherwise valid resources.
+        retry_statuses.update({400, 403})
+    for attempt in range(2):
+        try:
+            response = requests.get(url, headers=headers, timeout=timeout)
+            if response.status_code not in retry_statuses or attempt == 1:
+                return response
+        except requests.RequestException:
+            if attempt == 1:
+                raise
+        logger.warning(f"  ⚠️ {bank_name} temporary HTTP failure; retrying once")
+        time.sleep(1)
+
+
 def get_bank_response(url, headers, logger, bank_name, timeout=20):
     """Fetch a bank resource directly, then retry through Google on WAF blocks.
 
@@ -49,9 +71,12 @@ def get_bank_response(url, headers, logger, bank_name, timeout=20):
     block page. The returned boolean records whether the fallback was needed.
     """
     direct_error = None
+    parsed = urlsplit(url)
+    request_headers = dict(headers)
+    request_headers.setdefault("Referer", f"{parsed.scheme}://{parsed.netloc}/")
 
     try:
-        response = requests.get(url, headers=headers, timeout=timeout)
+        response = _get_with_retry(url, request_headers, timeout, logger, bank_name)
         if not _is_block_page(response):
             response.raise_for_status()
             return response, False
@@ -66,7 +91,9 @@ def get_bank_response(url, headers, logger, bank_name, timeout=20):
         "retrying through the Google Translate web proxy"
     )
 
-    response = requests.get(fallback_url, headers=headers, timeout=timeout)
+    response = _get_with_retry(
+        fallback_url, request_headers, timeout, logger, bank_name, proxy=True
+    )
     response.raise_for_status()
     if _is_block_page(response):
         raise requests.HTTPError(

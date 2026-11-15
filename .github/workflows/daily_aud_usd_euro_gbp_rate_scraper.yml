@@ -55,9 +55,13 @@ jobs:
     - name: Install Python dependencies
       run: |
         uv pip install --system -r requirements.txt
+
+    - name: Test bank source readers
+      run: python -m unittest discover -s tests -v
     
     - name: Display current time (Sri Lanka)
       run: |
+        echo "SCRAPE_START_TIME=$(date +%s)" >> "$GITHUB_ENV"
         echo "Current UTC time: $(date -u)"
         echo "Current Sri Lanka time: $(TZ=Asia/Colombo date)"
         echo "🌍 Starting comprehensive exchange rate scraping for AUD, USD, EUR, and GBP"
@@ -116,7 +120,7 @@ jobs:
       with:
         name: ultimate-exchange-rate-summaries-${{ github.run_number }}
         path: |
-          execution_summary.json
+          aud_execution_summary.json
           usd_execution_summary.json
           eur_execution_summary.json
           gbp_execution_summary.json
@@ -140,7 +144,7 @@ jobs:
         path: |
           logs/
           screenshots/
-          execution_summary.json
+          aud_execution_summary.json
           usd_execution_summary.json
           eur_execution_summary.json
           gbp_execution_summary.json
@@ -158,14 +162,15 @@ jobs:
         # AUD Summary
         echo "🇦🇺 AUD EXCHANGE RATES:"
         echo "========================"
-        if [ -f "execution_summary.json" ]; then
+        if [ -f "aud_execution_summary.json" ]; then
           echo "✅ AUD scraping completed successfully"
           if command -v jq &> /dev/null; then
-            echo "   Banks scraped: $(jq -r '.total_banks_scraped' execution_summary.json)"
-            echo "   Best to sell AUD: $(jq -r '.best_rate_to_sell_aud.bank' execution_summary.json) - LKR $(jq -r '.best_rate_to_sell_aud.rate' execution_summary.json)"
-            echo "   Best to buy AUD: $(jq -r '.best_rate_to_buy_aud.bank' execution_summary.json) - LKR $(jq -r '.best_rate_to_buy_aud.rate' execution_summary.json)"
-            echo "   Average buying rate: LKR $(jq -r '.average_buying_rate' execution_summary.json)"
-            echo "   Average selling rate: LKR $(jq -r '.average_selling_rate' execution_summary.json)"
+            echo "   Banks scraped: $(jq -r '.total_banks_scraped' aud_execution_summary.json)"
+            echo "   Failed banks: $(jq -r '(.failed_banks // []) | join(", ")' aud_execution_summary.json)"
+            echo "   Best to sell AUD: $(jq -r '.best_rate_to_sell.bank' aud_execution_summary.json) - LKR $(jq -r '.best_rate_to_sell.rate' aud_execution_summary.json)"
+            echo "   Best to buy AUD: $(jq -r '.best_rate_to_buy.bank' aud_execution_summary.json) - LKR $(jq -r '.best_rate_to_buy.rate' aud_execution_summary.json)"
+            echo "   Average buying rate: LKR $(jq -r '.average_buying_rate' aud_execution_summary.json)"
+            echo "   Average selling rate: LKR $(jq -r '.average_selling_rate' aud_execution_summary.json)"
           fi
         else
           echo "❌ AUD scraping failed - summary not found"
@@ -179,8 +184,9 @@ jobs:
           echo "✅ USD scraping completed successfully"
           if command -v jq &> /dev/null; then
             echo "   Banks scraped: $(jq -r '.total_banks_scraped' usd_execution_summary.json)"
-            echo "   Best to sell USD: $(jq -r '.best_rate_to_sell_usd.bank' usd_execution_summary.json) - LKR $(jq -r '.best_rate_to_sell_usd.rate' usd_execution_summary.json)"
-            echo "   Best to buy USD: $(jq -r '.best_rate_to_buy_usd.bank' usd_execution_summary.json) - LKR $(jq -r '.best_rate_to_buy_usd.rate' usd_execution_summary.json)"
+            echo "   Failed banks: $(jq -r '(.failed_banks // []) | join(", ")' usd_execution_summary.json)"
+            echo "   Best to sell USD: $(jq -r '.best_rate_to_sell.bank' usd_execution_summary.json) - LKR $(jq -r '.best_rate_to_sell.rate' usd_execution_summary.json)"
+            echo "   Best to buy USD: $(jq -r '.best_rate_to_buy.bank' usd_execution_summary.json) - LKR $(jq -r '.best_rate_to_buy.rate' usd_execution_summary.json)"
             echo "   Average buying rate: LKR $(jq -r '.average_buying_rate' usd_execution_summary.json)"
             echo "   Average selling rate: LKR $(jq -r '.average_selling_rate' usd_execution_summary.json)"
           fi
@@ -196,8 +202,9 @@ jobs:
           echo "✅ EUR scraping completed successfully"
           if command -v jq &> /dev/null; then
             echo "   Banks scraped: $(jq -r '.total_banks_scraped' eur_execution_summary.json)"
-            echo "   Best to sell EUR: $(jq -r '.best_rate_to_sell_eur.bank' eur_execution_summary.json) - LKR $(jq -r '.best_rate_to_sell_eur.rate' eur_execution_summary.json)"
-            echo "   Best to buy EUR: $(jq -r '.best_rate_to_buy_eur.bank' eur_execution_summary.json) - LKR $(jq -r '.best_rate_to_buy_eur.rate' eur_execution_summary.json)"
+            echo "   Failed banks: $(jq -r '(.failed_banks // []) | join(", ")' eur_execution_summary.json)"
+            echo "   Best to sell EUR: $(jq -r '.best_rate_to_sell.bank' eur_execution_summary.json) - LKR $(jq -r '.best_rate_to_sell.rate' eur_execution_summary.json)"
+            echo "   Best to buy EUR: $(jq -r '.best_rate_to_buy.bank' eur_execution_summary.json) - LKR $(jq -r '.best_rate_to_buy.rate' eur_execution_summary.json)"
             echo "   Average buying rate: LKR $(jq -r '.average_buying_rate' eur_execution_summary.json)"
             echo "   Average selling rate: LKR $(jq -r '.average_selling_rate' eur_execution_summary.json)"
           fi
@@ -213,8 +220,9 @@ jobs:
           echo "✅ GBP scraping completed successfully"
           if command -v jq &> /dev/null; then
             echo "   Banks scraped: $(jq -r '.total_banks_scraped' gbp_execution_summary.json)"
-            echo "   Best to sell GBP: $(jq -r '.best_rate_to_sell_gbp.bank' gbp_execution_summary.json) - LKR $(jq -r '.best_rate_to_sell_gbp.rate' gbp_execution_summary.json)"
-            echo "   Best to buy GBP: $(jq -r '.best_rate_to_buy_gbp.bank' gbp_execution_summary.json) - LKR $(jq -r '.best_rate_to_buy_gbp.rate' gbp_execution_summary.json)"
+            echo "   Failed banks: $(jq -r '(.failed_banks // []) | join(", ")' gbp_execution_summary.json)"
+            echo "   Best to sell GBP: $(jq -r '.best_rate_to_sell.bank' gbp_execution_summary.json) - LKR $(jq -r '.best_rate_to_sell.rate' gbp_execution_summary.json)"
+            echo "   Best to buy GBP: $(jq -r '.best_rate_to_buy.bank' gbp_execution_summary.json) - LKR $(jq -r '.best_rate_to_buy.rate' gbp_execution_summary.json)"
             echo "   Average buying rate: LKR $(jq -r '.average_buying_rate' gbp_execution_summary.json)"
             echo "   Average selling rate: LKR $(jq -r '.average_selling_rate' gbp_execution_summary.json)"
           fi
@@ -228,7 +236,7 @@ jobs:
         echo "============================="
         
         total_successes=0
-        if [ -f "execution_summary.json" ]; then
+        if [ -f "aud_execution_summary.json" ]; then
           total_successes=$((total_successes + 1))
         fi
         if [ -f "usd_execution_summary.json" ]; then
@@ -273,27 +281,27 @@ jobs:
           echo "🏆 Currency Value Rankings (for people selling foreign currency):"
           
           if [ -f "gbp_execution_summary.json" ]; then
-            gbp_rate=$(jq -r '.best_rate_to_sell_gbp.rate' gbp_execution_summary.json 2>/dev/null || echo "0")
-            echo "   🥇 GBP: LKR $gbp_rate ($(jq -r '.best_rate_to_sell_gbp.bank' gbp_execution_summary.json 2>/dev/null || echo "N/A"))"
+            gbp_rate=$(jq -r '.best_rate_to_sell.rate' gbp_execution_summary.json 2>/dev/null || echo "0")
+            echo "   🥇 GBP: LKR $gbp_rate ($(jq -r '.best_rate_to_sell.bank' gbp_execution_summary.json 2>/dev/null || echo "N/A"))"
           fi
           
           if [ -f "eur_execution_summary.json" ]; then
-            eur_rate=$(jq -r '.best_rate_to_sell_eur.rate' eur_execution_summary.json 2>/dev/null || echo "0")
-            echo "   🥈 EUR: LKR $eur_rate ($(jq -r '.best_rate_to_sell_eur.bank' eur_execution_summary.json 2>/dev/null || echo "N/A"))"
+            eur_rate=$(jq -r '.best_rate_to_sell.rate' eur_execution_summary.json 2>/dev/null || echo "0")
+            echo "   🥈 EUR: LKR $eur_rate ($(jq -r '.best_rate_to_sell.bank' eur_execution_summary.json 2>/dev/null || echo "N/A"))"
           fi
           
           if [ -f "usd_execution_summary.json" ]; then
-            usd_rate=$(jq -r '.best_rate_to_sell_usd.rate' usd_execution_summary.json 2>/dev/null || echo "0")
-            echo "   🥉 USD: LKR $usd_rate ($(jq -r '.best_rate_to_sell_usd.bank' usd_execution_summary.json 2>/dev/null || echo "N/A"))"
+            usd_rate=$(jq -r '.best_rate_to_sell.rate' usd_execution_summary.json 2>/dev/null || echo "0")
+            echo "   🥉 USD: LKR $usd_rate ($(jq -r '.best_rate_to_sell.bank' usd_execution_summary.json 2>/dev/null || echo "N/A"))"
           fi
           
-          if [ -f "execution_summary.json" ]; then
-            aud_rate=$(jq -r '.best_rate_to_sell_aud.rate' execution_summary.json 2>/dev/null || echo "0")
-            echo "   🏅 AUD: LKR $aud_rate ($(jq -r '.best_rate_to_sell_aud.bank' execution_summary.json 2>/dev/null || echo "N/A"))"
+          if [ -f "aud_execution_summary.json" ]; then
+            aud_rate=$(jq -r '.best_rate_to_sell.rate' aud_execution_summary.json 2>/dev/null || echo "0")
+            echo "   🏅 AUD: LKR $aud_rate ($(jq -r '.best_rate_to_sell.bank' aud_execution_summary.json 2>/dev/null || echo "N/A"))"
           fi
         fi
         
         echo ""
         echo "✨ Ultimate exchange rate scraping workflow completed!"
-        echo "🕐 Total execution time: Approximately $(( ($(date +%s) - start_time) / 60 )) minutes" || echo "🕐 Execution completed"
+        echo "🕐 Total execution time: Approximately $(( ($(date +%s) - ${SCRAPE_START_TIME:-$(date +%s)}) / 60 )) minutes" || echo "🕐 Execution completed"
         echo "📊 All data available in MongoDB Atlas for analysis and visualization"

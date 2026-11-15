@@ -21,6 +21,12 @@ from pathlib import Path
 from dotenv import load_dotenv
 import json
 from bank_http import get_bank_response
+from bank_sources import (
+    EXPECTED_BANKS,
+    scrape_boc_rates as read_boc_rates,
+    scrape_combank_rates as read_combank_rates,
+    scrape_cbsl_rates as read_cbsl_rates,
+)
 
 # Selenium imports
 try:
@@ -356,82 +362,13 @@ def setup_selenium_for_github_actions():
 # ============================================================
 
 def scrape_boc_rates(logger):
-    """Scrape GBP exchange rates from Bank of Ceylon website"""
-    url = "https://www.boc.lk/rates-tariff"
-    try:
-        logger.info("🏦 Scraping Bank of Ceylon...")
-        response, used_fallback = get_bank_response(
-            url, HEADERS, logger, "BOC"
-        )
-
-        soup = BeautifulSoup(response.content, 'html.parser')
-        tables = soup.find_all('table')
-
-        for table in tables:
-            rows = table.find_all('tr')
-            for row in rows:
-                cells = row.find_all(['td', 'th'])
-                row_text = [cell.get_text(strip=True) for cell in cells]
-
-                # BOC uses currency code as first cell (e.g., 'GBP')
-                if len(row_text) > 0 and row_text[0] == CURRENCY and len(row_text) >= 3:
-                    numeric_values = []
-                    for cell in row_text[1:]:
-                        numbers = re.findall(r'\d+\.\d+', cell)
-                        for num in numbers:
-                            if float(num) > 50:
-                                numeric_values.append(float(num))
-
-                    if len(numeric_values) >= 2:
-                        result = {
-                            'bank': normalize_bank_name('Bank of Ceylon'),
-                            'currency': CURRENCY,
-                            'buying_rate': numeric_values[0],
-                            'selling_rate': numeric_values[1],
-                            'source': 'BOC Direct' if not used_fallback else 'BOC via Google Translate',
-                            'timestamp': datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
-                            'source_url': url
-                        }
-                        logger.info(f"  ✅ BOC - Buy: {result['buying_rate']}, Sell: {result['selling_rate']}")
-                        return result
-
-        logger.warning(f"  ⚠️ {CURRENCY} not found in BOC tables")
-        return None
-
-    except Exception as e:
-        logger.error(f"  ❌ Error scraping BOC: {e}")
-        return None
+    """Read GBP quotes from the shared BOC source reader."""
+    return read_boc_rates(CURRENCY, HEADERS, logger)
 
 
 def scrape_combank_rates(logger):
-    """Scrape GBP exchange rates from Commercial Bank's public JSON API."""
-    url = "https://www.combank.lk/api/exchange-rates/"
-    try:
-        logger.info("🏦 Scraping Commercial Bank (API)...")
-        response, used_fallback = get_bank_response(
-            url, HEADERS, logger, "Commercial Bank"
-        )
-
-        for rate in response.json():
-            if rate.get('excode') == CURRENCY:
-                result = {
-                    'bank': normalize_bank_name('Commercial Bank'),
-                    'currency': CURRENCY,
-                    'buying_rate': float(rate['currency_buying_rate']),
-                    'selling_rate': float(rate['currency_selling_rate']),
-                    'source': 'Combank API' if not used_fallback else 'Combank API via Google Translate',
-                    'timestamp': datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
-                    'source_url': url
-                }
-                logger.info(f"  ✅ Combank - Buy: {result['buying_rate']}, Sell: {result['selling_rate']}")
-                return result
-
-        logger.warning(f"  ⚠️ {CURRENCY} not found in Combank API")
-        return None
-
-    except Exception as e:
-        logger.error(f"  ❌ Error scraping Combank: {e}")
-        return None
+    """Read GBP quotes from the shared COMBANK source reader."""
+    return read_combank_rates(CURRENCY, HEADERS, logger)
 
 
 def scrape_amana_rates(logger):
@@ -635,47 +572,8 @@ def scrape_ntb_rates(logger, screenshots_dir):
 
 
 def scrape_cbsl_rates(logger):
-    """Scrape GBP exchange rates from the Central Bank of Sri Lanka (indicative TT rate)"""
-    url = f"https://www.cbsl.gov.lk/cbsl_custom/charts/{CURRENCY.lower()}/indexsmall.php"
-    try:
-        logger.info("🏦 Scraping Central Bank of Sri Lanka...")
-        response = requests.get(url, headers=HEADERS, timeout=15)
-        response.raise_for_status()
-
-        soup = BeautifulSoup(response.content, 'html.parser')
-        buying_rate = None
-        selling_rate = None
-
-        for p in soup.find_all('p'):
-            text = p.get_text(' ', strip=True)
-            if text.startswith('Buy'):
-                match = re.search(r'(\d+\.\d+)', text)
-                if match:
-                    buying_rate = float(match.group(1))
-            elif text.startswith('Sell'):
-                match = re.search(r'(\d+\.\d+)', text)
-                if match:
-                    selling_rate = float(match.group(1))
-
-        if buying_rate is not None and selling_rate is not None:
-            result = {
-                'bank': normalize_bank_name('Central Bank of Sri Lanka'),
-                'currency': CURRENCY,
-                'buying_rate': buying_rate,
-                'selling_rate': selling_rate,
-                'source': 'CBSL Direct',
-                'timestamp': datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
-                'source_url': url
-            }
-            logger.info(f"  \u2705 CBSL - Buy: {result['buying_rate']}, Sell: {result['selling_rate']}")
-            return result
-
-        logger.warning(f"  \u26a0\ufe0f {CURRENCY} buy/sell rates not found for CBSL")
-        return None
-
-    except Exception as e:
-        logger.error(f"  \u274c Error scraping CBSL: {e}")
-        return None
+    """Read GBP quotes from the shared CBSL source reader."""
+    return read_cbsl_rates(CURRENCY, HEADERS, logger)
 
 
 def scrape_sampath_rates(logger, screenshots_dir):
@@ -728,6 +626,10 @@ def create_execution_summary(bank_data_list, logger):
         'execution_time': datetime.now().isoformat(),
         'currency': CURRENCY,
         'total_banks_scraped': len(bank_data_list),
+        'total_banks_expected': len(EXPECTED_BANKS),
+        'failed_banks': [bank for bank in EXPECTED_BANKS
+                         if bank not in {item['bank'] for item in bank_data_list}],
+        'coverage_status': 'complete' if len(bank_data_list) == len(EXPECTED_BANKS) else 'partial',
         'banks_list': [bank['bank'] for bank in bank_data_list],
         'sources_used': list(set(bank.get('source', 'direct') for bank in bank_data_list)),
         'github_actions': bool(os.getenv('GITHUB_ACTIONS')),
